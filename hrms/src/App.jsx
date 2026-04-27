@@ -30,7 +30,7 @@ import { usePermissions } from './context/PermissionsContext';
 
 /**
  * Renders `children` if the user has the required permission,
- * otherwise shows an AccessDenied page.
+ * otherwise shows an AccessDenied page..
  */
 const PermissionRoute = ({ module, action, children }) => {
   const { can, isOwner } = usePermissions();
