@@ -7,7 +7,8 @@ const PermissionsContext = createContext({});
 const ALL_PERMISSIONS = {
     employees: { view: true, edit: true, delete: true },
     attendance: { view: true, edit: true },
-    payroll: { view: true, edit: true }
+    payroll: { view: true, edit: true },
+    leaves: { view: true, edit: true }
 };
 
 export const PermissionsProvider = ({ children }) => {

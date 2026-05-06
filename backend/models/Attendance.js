@@ -30,7 +30,25 @@ const attendanceSchema = new mongoose.Schema(
             type: Boolean,
             default: false,
         },
+        overtimeIn: {
+            type: Date,
+        },
+        overtimeOut: {
+            type: Date,
+        },
+        overtimeStatus: {
+            type: String,
+            enum: ['None', 'Pending', 'Approved', 'Rejected'],
+            default: 'None',
+        },
+        overtimeRejectReason: {
+            type: String,
+        },
         isAutoLeave: {
+            type: Boolean,
+            default: false,
+        },
+        markedByFace: {
             type: Boolean,
             default: false,
         },

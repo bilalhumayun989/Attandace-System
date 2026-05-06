@@ -1,6 +1,7 @@
 import { API_BASE_URL } from '../../config';
 import React, { useState, useEffect } from 'react';
-import { Plus, Search, Mail, Phone, Calendar, Edit2, Trash2 } from 'lucide-react';
+import { Plus, Search, Mail, Phone, Calendar, Edit2, Trash2, Camera } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/Card';
@@ -9,6 +10,7 @@ import { Modal } from '../../components/ui/Modal';
 import { usePermissions } from '../../context/PermissionsContext';
 
 const EmployeeList = () => {
+    const navigate = useNavigate();
     const { can } = usePermissions();
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -37,10 +39,12 @@ const EmployeeList = () => {
         department: '',
         role: '',
         salary: '',
+        extraHourlyRate: '',
         workingHours: {
             start: '09:00',
             end: '18:00'
-        }
+        },
+        isOvertimeAllowed: false
     });
 
     const [employees, setEmployees] = useState([]);
@@ -81,6 +85,8 @@ const EmployeeList = () => {
             department: employee.department,
             role: employee.role,
             salary: employee.salary || '',
+            extraHourlyRate: employee.extraHourlyRate || '',
+            isOvertimeAllowed: employee.isOvertimeAllowed || false,
             workingHours: employee.workingHours || { start: '09:00', end: '18:00' }
         });
         setIsEditModalOpen(true);
@@ -107,7 +113,9 @@ const EmployeeList = () => {
                     department: formData.department,
                     role: formData.role,
                     workingHours: formData.workingHours,
-                    salary: Number(formData.salary)
+                    salary: Number(formData.salary),
+                    extraHourlyRate: Number(formData.extraHourlyRate),
+                    isOvertimeAllowed: formData.isOvertimeAllowed
                 }),
 
             });
@@ -115,12 +123,13 @@ const EmployeeList = () => {
             const data = await response.json();
 
             if (response.ok) {
-                setMessage({ type: 'success', text: 'Employee created and email sent successfully!' });
+                setMessage({ type: 'success', text: 'Employee created! Redirecting to Face Enrollment...' });
                 fetchEmployees();
                 setTimeout(() => {
                     setIsAddModalOpen(false);
                     resetForm();
-                }, 2000);
+                    navigate(`/admin/enroll-face?userId=${data._id}`);
+                }, 1500);
             } else {
                 setMessage({ type: 'error', text: data.message || 'Failed to create employee' });
             }
@@ -150,7 +159,9 @@ const EmployeeList = () => {
                     department: formData.department,
                     role: formData.role,
                     workingHours: formData.workingHours,
-                    salary: Number(formData.salary)
+                    salary: Number(formData.salary),
+                    extraHourlyRate: Number(formData.extraHourlyRate),
+                    isOvertimeAllowed: formData.isOvertimeAllowed
                 }),
             });
 
@@ -203,6 +214,8 @@ const EmployeeList = () => {
             department: '',
             role: '',
             salary: '',
+            extraHourlyRate: '',
+            isOvertimeAllowed: false,
             workingHours: { start: '09:00', end: '18:00' }
         });
         setEditingEmployee(null);
@@ -257,6 +270,7 @@ const EmployeeList = () => {
                                     <th className="h-10 px-4 py-3 align-middle hidden md:table-cell">Department</th>
                                     <th className="h-10 px-4 py-3 align-middle hidden lg:table-cell">Shift</th>
                                     <th className="h-10 px-4 py-3 align-middle">Status</th>
+                                    <th className="h-10 px-4 py-3 align-middle hidden sm:table-cell">Face Status</th>
                                     <th className="h-10 px-4 py-3 align-middle text-right">Actions</th>
                                 </tr>
                             </thead>
@@ -289,8 +303,26 @@ const EmployeeList = () => {
                                                 {employee.status || 'Active'}
                                             </Badge>
                                         </td>
+                                        <td className="p-4 align-middle hidden sm:table-cell">
+                                            {employee.faceEnrolled ? (
+                                                <Badge className="bg-emerald-100 text-emerald-800 border-emerald-200">Enrolled</Badge>
+                                            ) : (
+                                                <Badge className="bg-rose-100 text-rose-800 border-rose-200">Not Enrolled</Badge>
+                                            )}
+                                        </td>
                                         <td className="p-4 align-middle text-right">
                                             <div className="flex justify-end gap-2">
+                                                {can('employees', 'edit') && (
+                                                    <Button 
+                                                        variant="ghost" 
+                                                        size="icon" 
+                                                        className="h-8 w-8 text-emerald-600" 
+                                                        title="Enroll Face"
+                                                        onClick={() => navigate(`/admin/enroll-face?userId=${employee._id}`)}
+                                                    >
+                                                        <Camera className="h-4 w-4" />
+                                                    </Button>
+                                                )}
                                                 {can('employees', 'edit') && (
                                                     <Button variant="ghost" size="icon" className="h-8 w-8 text-primary" onClick={() => handleEditClick(employee)}>
                                                         <Edit2 className="h-4 w-4" />
@@ -395,6 +427,21 @@ const EmployeeList = () => {
                                     className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all"
                                 />
                             </div>
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-bold text-foreground/80">Overtime Rate (PKR/hr)</label>
+                            <Input name="extraHourlyRate" type="number" value={formData.extraHourlyRate} onChange={handleInputChange} placeholder="500" className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all" />
+                        </div>
+                        <div className="space-y-2 flex flex-col justify-end">
+                            <label className="flex items-center gap-3 cursor-pointer p-2 border border-muted/40 rounded-lg hover:bg-muted/10 transition-colors h-10">
+                                <input 
+                                    type="checkbox" 
+                                    className="w-4 h-4 text-primary rounded border-muted-foreground/30"
+                                    checked={formData.isOvertimeAllowed}
+                                    onChange={(e) => setFormData(prev => ({ ...prev, isOvertimeAllowed: e.target.checked }))}
+                                />
+                                <span className="text-sm font-bold text-foreground/80">Allow Overtime Tracking</span>
+                            </label>
                         </div>
                     </div>
                 </div>

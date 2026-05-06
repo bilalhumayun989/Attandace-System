@@ -28,7 +28,7 @@ const generateToken = (id) => {
 // @route   POST /api/users/add
 // @access  Public (Should be protected by Admin middleware in production)
 const createEmployee = async (req, res) => {
-    const { employeeId, name, email, password, role, department, workingHours, salary } = req.body;
+    const { employeeId, name, email, password, role, department, workingHours, salary, extraHourlyRate, isOvertimeAllowed } = req.body;
 
 
     try {
@@ -84,6 +84,8 @@ const createEmployee = async (req, res) => {
             workingHours,
             isVerified: true, // Employees created by admin are auto-verified
             salary: salary || 0,
+            extraHourlyRate: extraHourlyRate || 0,
+            isOvertimeAllowed: isOvertimeAllowed || false,
             adminId: req.adminId, // Scope to the tenant
         });
 
@@ -97,6 +99,8 @@ const createEmployee = async (req, res) => {
                 department: user.department,
                 workingHours: user.workingHours,
                 salary: user.salary,
+                extraHourlyRate: user.extraHourlyRate,
+                isOvertimeAllowed: user.isOvertimeAllowed,
                 message: 'Employee created and email sent successfully',
             });
         } else {
@@ -495,6 +499,8 @@ const updateUser = async (req, res) => {
                 user.department = req.body.department || user.department;
                 user.workingHours = req.body.workingHours || user.workingHours;
                 user.salary = req.body.salary !== undefined ? req.body.salary : user.salary;
+                user.extraHourlyRate = req.body.extraHourlyRate !== undefined ? req.body.extraHourlyRate : user.extraHourlyRate;
+                user.isOvertimeAllowed = req.body.isOvertimeAllowed !== undefined ? req.body.isOvertimeAllowed : user.isOvertimeAllowed;
                 user.customRole = req.body.customRole !== undefined ? req.body.customRole : user.customRole;
             } else if (isSelf) {
                 // Allow self-update for name and email, but prevent sensitive fields
@@ -544,6 +550,8 @@ const updateUser = async (req, res) => {
                 department: updatedUser.department,
                 workingHours: updatedUser.workingHours,
                 salary: updatedUser.salary,
+                extraHourlyRate: updatedUser.extraHourlyRate,
+                isOvertimeAllowed: updatedUser.isOvertimeAllowed,
                 status: updatedUser.status
             });
         } else {

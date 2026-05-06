@@ -9,6 +9,9 @@ const attendanceRoutes = require('./routes/attendanceRoutes');
 // Load environment variables
 dotenv.config();
 
+// Start cron jobs
+require('./utils/reportCron');
+
 // Connect to Database (Initial attempt, do not block)
 connectDB().catch(err => console.error("Initial DB Connection failed:", err.message));
 
@@ -57,6 +60,7 @@ app.use(async (req, res, next) => {
 app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/attendance', require('./routes/attendanceRoutes'));
 app.use('/api/payroll', require('./routes/payrollRoutes'));
+app.use('/api/admin-leave', require('./routes/leaveRoutes'));
 
 
 // Basic route

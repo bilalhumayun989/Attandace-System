@@ -11,14 +11,20 @@ import AdminDashboard from './pages/admin/AdminDashboard';
 import EmployeeList from './pages/admin/EmployeeList';
 import AttendanceTracker from './pages/admin/AttendanceTracker';
 import PayrollManagement from './pages/admin/PayrollManagement';
+import LeaveManagement from './pages/admin/LeaveManagement';
+
 
 import AdminSettings from './pages/admin/AdminSettings';
 
 
 import AppLayout from './layouts/AppLayout';
+import EmployeeLayout from './layouts/EmployeeLayout';
 import UserDashboard from './pages/employee/UserDashboard';
 import MyAttendance from './pages/employee/MyAttendance';
 import Profile from './pages/employee/Profile';
+
+import FaceKiosk from './pages/FaceKiosk';
+import FaceEnrollment from './pages/FaceEnrollment';
 
 
 
@@ -51,6 +57,7 @@ function App() {
             <Route path="/verify-email/:token" element={<VerifyEmail />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password/:token" element={<ResetPassword />} />
+            <Route path="/kiosk" element={<FaceKiosk />} />
 
             {/* Admin Routes */}
             <Route element={<ProtectedRoute allowedRoles={['Admin']} />}>
@@ -73,14 +80,20 @@ function App() {
                     <PayrollManagement />
                   </PermissionRoute>
                 } />
+                <Route path="leaves" element={
+                  <PermissionRoute module="leaves" action="view">
+                    <LeaveManagement />
+                  </PermissionRoute>
+                } />
                 <Route path="settings" element={<AdminSettings />} />
+                <Route path="enroll-face" element={<FaceEnrollment />} />
 
               </Route>
             </Route>
 
             {/* Employee Routes */}
             <Route element={<ProtectedRoute allowedRoles={['Employee']} />}>
-              <Route path="/employee" element={<AppLayout />}>
+              <Route path="/employee" element={<EmployeeLayout />}>
                 <Route index element={<Navigate to="/employee/dashboard" replace />} />
                 <Route path="dashboard" element={<UserDashboard />} />
                 <Route path="attendance" element={<MyAttendance />} />

@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../..
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
-import { Search, Filter, Download, Calendar as CalendarIcon, Info, ChevronLeft, ChevronRight, User as UserIcon } from 'lucide-react';
+import { Search, Filter, Download, Calendar as CalendarIcon, Info, ChevronLeft, ChevronRight, User as UserIcon, Zap, Mail } from 'lucide-react';
 import { Modal } from '../../components/ui/Modal';
 import { usePermissions } from '../../context/PermissionsContext';
 
@@ -157,6 +157,47 @@ const AttendanceTracker = () => {
             setUpdateLoading(false);
         }
     };
+    
+    const handleOvertimeApproval = async (id, status, reason = '') => {
+        try {
+            const response = await fetch(`${API_BASE_URL}/attendance/overtime/approve/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'X-Role-Context': 'Admin' },
+                body: JSON.stringify({ status, reason }),
+                credentials: 'include'
+            });
+            if (response.ok) {
+                const data = await response.json();
+                setAttendanceData(prev => prev.map(r => r._id === id ? data.attendance : r));
+                setSelectedRecord(data.attendance);
+                alert(`Overtime ${status.toLowerCase()}`);
+            }
+        } catch (error) {
+            alert('Approval failed');
+        }
+    };
+
+    const [sendingReport, setSendingReport] = useState(false);
+
+    const handleSendEmailReport = async () => {
+        setSendingReport(true);
+        try {
+            const response = await fetch(`${API_BASE_URL}/attendance/report/send`, {
+                method: 'POST',
+                headers: { 'X-Role-Context': 'Admin' },
+                credentials: 'include'
+            });
+            if (response.ok) {
+                alert('Report email sent successfully to all admins!');
+            } else {
+                alert('Failed to send report email.');
+            }
+        } catch (error) {
+            alert('Error connecting to server.');
+        } finally {
+            setSendingReport(false);
+        }
+    };
 
     const months = [
         { val: '01', label: 'January' }, { val: '02', label: 'February' }, { val: '03', label: 'March' },
@@ -193,7 +234,16 @@ const AttendanceTracker = () => {
                             {years.map(y => <option key={y} value={y}>{y}</option>)}
                         </select>
                     </div>
-                    <Button onClick={handleExport} className="shadow-lg shadow-primary/20 bg-primary text-primary-foreground">
+                    <Button 
+                        onClick={handleSendEmailReport} 
+                        disabled={sendingReport} 
+                        variant="outline" 
+                        className="border-primary/50 text-primary hover:bg-primary/10 transition-all font-semibold"
+                    >
+                        {sendingReport ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Mail className="mr-2 h-4 w-4" />}
+                        Email Report
+                    </Button>
+                    <Button onClick={handleExport} className="shadow-lg shadow-primary/20 bg-primary text-primary-foreground font-semibold">
                         <Download size={18} className="mr-2" />
                         Export CSV
                     </Button>
@@ -353,6 +403,63 @@ const AttendanceTracker = () => {
                                 <p className="font-bold">{format12h(selectedRecord.checkOut)}</p>
                             </div>
                         </div>
+
+
+                        {selectedRecord.overtimeIn && (
+                            <div className="space-y-2 border-t border-border/40 pt-4">
+                                <label className="text-sm font-bold flex items-center gap-2">
+                                    <Zap className="h-4 w-4 text-amber-500 fill-amber-500" />
+                                    Overtime Request
+                                </label>
+                                <div className="p-4 bg-amber-500/5 border border-amber-500/20 rounded-xl space-y-3">
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-muted-foreground">Session:</span>
+                                        <span className="font-bold">
+                                            {format12h(selectedRecord.overtimeIn)} - {selectedRecord.overtimeOut ? format12h(selectedRecord.overtimeOut) : 'In Progress'}
+                                        </span>
+                                    </div>
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-muted-foreground">Status:</span>
+                                        <Badge variant={
+                                            selectedRecord.overtimeStatus === 'Approved' ? 'success' :
+                                            selectedRecord.overtimeStatus === 'Rejected' ? 'destructive' : 'warning'
+                                        }>
+                                            {selectedRecord.overtimeStatus || 'Pending'}
+                                        </Badge>
+                                    </div>
+
+                                    {selectedRecord.overtimeRejectReason && (
+                                        <div className="text-xs text-rose-600 bg-rose-50 p-2 rounded border border-rose-100 italic">
+                                            <strong>Reason:</strong> {selectedRecord.overtimeRejectReason}
+                                        </div>
+                                    )}
+
+                                    {selectedRecord.overtimeStatus === 'Pending' && selectedRecord.overtimeOut && (
+                                        <div className="flex gap-2 pt-2">
+                                            <Button
+                                                size="sm"
+                                                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white border-none"
+                                                onClick={() => handleOvertimeApproval(selectedRecord._id, 'Approved')}
+                                            >
+                                                Approve
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                variant="destructive"
+                                                className="flex-1"
+                                                onClick={() => {
+                                                    const reason = prompt('Enter rejection reason:');
+                                                    if (reason !== null) handleOvertimeApproval(selectedRecord._id, 'Rejected', reason || 'Rejected by admin');
+                                                }}
+                                            >
+                                                Reject
+                                            </Button>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
                         <div className="space-y-2">
                             <label className="text-sm font-bold">Override Status</label>
                             <select 

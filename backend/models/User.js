@@ -59,6 +59,26 @@ const userSchema = new mongoose.Schema(
             type: String,
             default: '',
         },
+        leaveQuota: {
+            type: Number,
+            default: 0,
+        },
+        offDays: {
+            type: [Number],
+            default: [0], // Default Sunday off (0 = Sunday, 6 = Saturday)
+        },
+        extraHourlyRate: {
+            type: Number,
+            default: 0,
+        },
+        isOvertimeAllowed: {
+            type: Boolean,
+            default: false,
+        },
+        shortTimeHourlyRate: {
+            type: Number,
+            default: 0, // 0 means use standard per-minute calculation
+        },
         title: {
             type: String,
             default: '',
@@ -68,6 +88,14 @@ const userSchema = new mongoose.Schema(
             type: require('mongoose').Schema.Types.ObjectId,
             ref: 'User',
             default: null,
+        },
+        faceDescriptors: {
+            type: [[Number]],
+            default: [],
+        },
+        faceEnrolled: {
+            type: Boolean,
+            default: false,
         },
         isVerified: {
             type: Boolean,

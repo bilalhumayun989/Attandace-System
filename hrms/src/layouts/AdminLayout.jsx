@@ -35,6 +35,7 @@ const AdminLayout = () => {
         { icon: LayoutDashboard, label: 'Dashboard', path: '/admin/dashboard', show: true },
         { icon: Users, label: 'Employees', path: '/admin/employees', show: can('employees', 'view') },
         { icon: CalendarCheck, label: 'Attendance', path: '/admin/attendance', show: can('attendance', 'view') },
+        { icon: ShieldCheck, label: 'Leaves & Rules', path: '/admin/leaves', show: can('leaves', 'view') },
         { icon: Wallet, label: 'Payroll', path: '/admin/payroll', show: can('payroll', 'view') },
         { icon: Settings, label: 'Settings', path: '/admin/settings', show: true },
     ].filter(item => item.show);

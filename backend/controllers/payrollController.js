@@ -35,16 +35,32 @@ const generatePayroll = async (req, res) => {
             const totalLates = attendanceRecords.filter(r => r.status === 'Late' || r.status === 'Short Hours').length;
             const presentDays = attendanceRecords.filter(r => r.status === 'Present' || r.status === 'Late' || r.status === 'Short Hours').length;
 
-            // Saturday/Monday Absence Rule: Counts as 3 absences each
+            // Absence Rule: Skip Off-Days
             let totalAbsents = 0;
+            let totalLeavesTaken = 0;
+            const userOffDays = user.offDays || [0]; // Default Sunday
+            
             attendanceRecords.forEach(r => {
+                const dateObj = new Date(r.date);
+                const dayOfWeek = dateObj.getDay();
+
                 if (r.status === 'Absent') {
-                    const day = new Date(r.date).getDay();
-                    if (day === 1 || day === 6) { // Monday or Saturday
-                        totalAbsents += 3;
-                    } else {
-                        totalAbsents += 1;
+                    // Only count as absent if it's NOT an off-day
+                    if (!userOffDays.includes(dayOfWeek)) {
+                        if (totalLeavesTaken < (user.leaveQuota || 0)) {
+                            totalLeavesTaken += 1; // Used a leave quota
+                        } else {
+                            // Saturday/Monday Absence Rule: Counts as 3 absences each if it's a working day
+                            // (User specifically mentioned Sat/Mon rule before, keeping it for working days)
+                            if (dayOfWeek === 1 || dayOfWeek === 6) { 
+                                totalAbsents += 3;
+                            } else {
+                                totalAbsents += 1;
+                            }
+                        }
                     }
+                } else if (r.status === 'On Leave') {
+                    totalLeavesTaken += 1;
                 }
             });
 
@@ -58,13 +74,35 @@ const generatePayroll = async (req, res) => {
             let totalOvertimeMinutes = 0;
             let totalShortMinutes = 0;
             attendanceRecords.forEach(r => {
-                if (r.checkIn && r.checkOut && r.duration) {
-                    const actualMinutes = r.duration; // duration is in minutes
-                    if (actualMinutes > expectedShiftMinutes) {
-                        totalOvertimeMinutes += (actualMinutes - expectedShiftMinutes);
-                    } else if (actualMinutes < expectedShiftMinutes) {
-                        totalShortMinutes += (expectedShiftMinutes - actualMinutes);
+                // Base Shift Calculation
+                let baseMinutes = 0;
+                if (r.checkIn && r.checkOut) {
+                    baseMinutes = r.duration || 0;
+                }
+
+                // Approved Overtime Calculation
+                let approvedOTMinutes = 0;
+                if (r.overtimeIn && r.overtimeOut && r.overtimeStatus === 'Approved') {
+                    approvedOTMinutes = Math.floor((new Date(r.overtimeOut) - new Date(r.overtimeIn)) / (1000 * 60));
+                }
+
+                // Logic: OT first covers Short Hours
+                if (baseMinutes < expectedShiftMinutes) {
+                    const shortage = expectedShiftMinutes - baseMinutes;
+                    const compensation = Math.min(shortage, approvedOTMinutes);
+                    
+                    const adjustedBase = baseMinutes + compensation;
+                    const remainingOT = approvedOTMinutes - compensation;
+
+                    if (adjustedBase < expectedShiftMinutes) {
+                        totalShortMinutes += (expectedShiftMinutes - adjustedBase);
                     }
+                    totalOvertimeMinutes += remainingOT;
+                } else {
+                    // Base is already complete or exceeded
+                    // Any extra time in base duration (staying late before checkout) + specific OT session
+                    const extraInBase = baseMinutes > expectedShiftMinutes ? (baseMinutes - expectedShiftMinutes) : 0;
+                    totalOvertimeMinutes += (extraInBase + approvedOTMinutes);
                 }
             });
 
@@ -74,8 +112,18 @@ const generatePayroll = async (req, res) => {
             
             // Per Minute Salary
             const perMinuteSalary = perDaySalary / expectedShiftMinutes;
-            const overtimePay = totalOvertimeMinutes * perMinuteSalary;
-            const shortHoursPayDeduction = totalShortMinutes * perMinuteSalary;
+            
+            // Overtime: Use extraHourlyRate if set (>0), otherwise use perMinuteSalary
+            const overtimeRatePerMinute = (user.extraHourlyRate && user.extraHourlyRate > 0) 
+                ? (user.extraHourlyRate / 60) 
+                : perMinuteSalary;
+            const overtimePay = totalOvertimeMinutes * overtimeRatePerMinute;
+            
+            // Short Hours: Use shortTimeHourlyRate if set (>0), otherwise use perMinuteSalary
+            const shortTimeDeductionRatePerMinute = (user.shortTimeHourlyRate && user.shortTimeHourlyRate > 0)
+                ? (user.shortTimeHourlyRate / 60)
+                : perMinuteSalary;
+            const shortHoursPayDeduction = totalShortMinutes * shortTimeDeductionRatePerMinute;
 
             // Deduction Logic (Standard):
             // 3 lates = 1 half day (0.5)
