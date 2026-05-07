@@ -1,4 +1,6 @@
+# pyrefly: ignore [missing-import]
 import cv2
+# pyrefly: ignore [missing-import]
 import face_recognition
 import numpy as np
 import requests

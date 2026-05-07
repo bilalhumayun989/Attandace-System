@@ -27,6 +27,8 @@ MOIRE_THRESHOLD = 15.0       # Threshold for digital noise detection
 MAX_DISAPPEARED = 10         # Frames to keep a face in memory after it leaves
 
 # API Configuration
-API_BASE_URL = "http://localhost:5000/api"
+# API_BASE_URL = "http://localhost:5000/api"
+# Replace YOUR_VPS_IP with your Hostinger VPS IP address
+API_BASE_URL = "http://72.61.126.168:5000/api"
 
 

@@ -22,6 +22,10 @@ const UserDashboard = () => {
     const userCompletedRef = useRef({}); // New: Tracks users who finished their shift for the day
     const userNamesRef = useRef({}); // New: Map IDs to Names for voice feedback
     const validationRef = useRef({ label: '', count: 0 }); // New: Buffers detections to prevent flickering matches
+    const [isFaceCentered, setIsFaceCentered] = useState(false);
+    const [isFaceDetected, setIsFaceDetected] = useState(false);
+    const [instruction, setInstruction] = useState('Position your face');
+    const lastVocalGuidanceRef = useRef(0);
 
     useEffect(() => {
         const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -107,82 +111,77 @@ const UserDashboard = () => {
             
             if (videoRef.current && videoRef.current.readyState === 4) {
                 try {
+                    const displaySize = { width: videoRef.current.videoWidth, height: videoRef.current.videoHeight };
+                    
                     // Increase minConfidence from 0.2 to 0.6 to ignore blurry/partial faces
                     const detection = await faceapi.detectSingleFace(videoRef.current, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.6 }))
                         .withFaceLandmarks()
                         .withFaceDescriptor();
 
                     if (detection) {
-                        const bestMatch = faceMatcher.findBestMatch(detection.descriptor);
-                        const currentLabel = bestMatch.label;
+                        setIsFaceDetected(true);
+                        const { box } = detection.detection;
+                        
+                        // Define center zone
+                        const centerX = displaySize.width / 2;
+                        const centerY = displaySize.height / 2;
+                        const faceCenterX = box.x + box.width / 2;
+                        const faceCenterY = box.y + box.height / 2;
+                        
+                        const isCentered = Math.abs(faceCenterX - centerX) < 100 && 
+                                          Math.abs(faceCenterY - centerY) < 100 &&
+                                          box.width > 120;
 
-                        // MULTI-FRAME VALIDATION LOGIC
-                        // Reduced to 2 frames for faster performance while keeping high accuracy
-                        if (validationRef.current.label === currentLabel) {
-                            validationRef.current.count += 1;
-                        } else {
-                            validationRef.current.label = currentLabel;
-                            validationRef.current.count = 1;
-                        }
+                        setIsFaceCentered(isCentered);
 
-                        // Debugging: show on screen what we see
-                        const nameInfo = currentLabel === 'unknown' ? 'Unknown Face' : 'Match Found';
-                        setFaceStatus(`Scanning... ${nameInfo} (${validationRef.current.count}/2)`);
-
-                        // Only act if we have 2 solid matches in a row (Approx 200ms)
-                        if (validationRef.current.count >= 2) {
-                            validationRef.current.count = 0; // Reset after action
-
-                            if (currentLabel !== 'unknown') {
-                                const userId = currentLabel;
-
-                                // 1. STATE: SHIFT COMPLETED
-                                if (userCompletedRef.current[userId]) {
-                                    const userName = userNamesRef.current[userId] || 'Employee';
-                                    setFaceStatus(`${userName}, Shift already completed for today.`);
-                                    speak(`${userName}, your shift is already completed.`);
-                                    setScanPause(true);
-                                    setTimeout(() => {
-                                        setScanPause(false);
-                                        setFaceStatus('Face recognition active. Ready for next employee.');
-                                    }, 4000);
-                                    return;
-                                }
-
-                                const lastScan = userCooldownsRef.current[userId];
-                                const fiveMinutes = 5 * 60 * 1000;
-                                
-                                // 2. STATE: COOLDOWN (Wait 5 mins for Check-Out)
-                                if (lastScan && (Date.now() - lastScan < fiveMinutes)) {
-                                    const minutesLeft = Math.ceil((fiveMinutes - (Date.now() - lastScan)) / 60000);
-                                    setFaceStatus(`Attendance recorded. Please wait ${minutesLeft} mins.`);
-                                    speak(`Attendance already recorded. Please wait.`);
-                                    setScanPause(true);
-                                    setTimeout(() => {
-                                        setScanPause(false);
-                                        setFaceStatus('Face recognition active. Ready for next employee.');
-                                    }, 4000);
-                                    return;
-                                }
-
-                                // 3. STATE: READY FOR ACTION (Check-In or Check-Out)
-                                handleFaceDetection(userId);
-                                return; 
+                        if (!isCentered) {
+                            if (box.width < 120) {
+                                setInstruction('Move Closer');
+                                triggerVocalGuidance('Please move closer to the camera');
                             } else {
-                                // UNKNOWN FACE HANDLING
-                                setFaceStatus('User not registered');
-                                speak('User not registered');
-                                setScanPause(true);
-                                setTimeout(() => {
-                                    setScanPause(false);
-                                    setFaceStatus('Face recognition active. Ready for next employee.');
-                                }, 3000);
-                                return;
+                                setInstruction('Center Face');
+                                triggerVocalGuidance('Please center your face');
+                            }
+                            validationRef.current = { label: '', count: 0 };
+                            setFaceStatus(instruction);
+                        } else {
+                            setInstruction('Hold Still...');
+                            const bestMatch = faceMatcher.findBestMatch(detection.descriptor);
+                            const currentLabel = bestMatch.label;
+
+                            if (validationRef.current.label === currentLabel) {
+                                validationRef.current.count += 1;
+                            } else {
+                                validationRef.current.label = currentLabel;
+                                validationRef.current.count = 1;
+                            }
+
+                            const nameInfo = currentLabel === 'unknown' ? 'Unknown Face' : 'Match Found';
+                            setFaceStatus(`Scanning... ${nameInfo} (${validationRef.current.count}/2)`);
+
+                            if (validationRef.current.count >= 2) {
+                                validationRef.current.count = 0;
+                                if (currentLabel !== 'unknown') {
+                                    handleFaceDetection(currentLabel);
+                                    return; 
+                                } else {
+                                    setFaceStatus('User not registered');
+                                    speak('User not registered');
+                                    setScanPause(true);
+                                    setTimeout(() => {
+                                        setScanPause(false);
+                                        setFaceStatus('Face recognition active.');
+                                    }, 3000);
+                                    return;
+                                }
                             }
                         }
                     } else {
-                        validationRef.current = { label: '', count: 0 }; // Reset if face lost
-                        setFaceStatus('Face recognition active. Ready for any employee.');
+                        setIsFaceDetected(false);
+                        setIsFaceCentered(false);
+                        setInstruction('Position your face');
+                        validationRef.current = { label: '', count: 0 };
+                        setFaceStatus('Looking for face...');
                     }
                 } catch (error) {
                     console.error('Detection error:', error);
@@ -210,6 +209,14 @@ const UserDashboard = () => {
         utterance.rate = 1.0;
         utterance.lang = 'en-US';
         window.speechSynthesis.speak(utterance);
+    };
+
+    const triggerVocalGuidance = (text) => {
+        const now = Date.now();
+        if (now - lastVocalGuidanceRef.current > 5000) {
+            speak(text);
+            lastVocalGuidanceRef.current = now;
+        }
     };
 
     const handleFaceDetection = async (detectedUserId) => {
@@ -363,7 +370,7 @@ const UserDashboard = () => {
                         </span>
                         {scanPause && <span className="text-amber-500 text-xs font-bold uppercase tracking-wider animate-pulse">Cooldown</span>}
                     </div>
-                    <div className="flex-1 relative bg-black flex items-center justify-center">
+                    <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden">
                         {cameraActive ? (
                             <>
                                 <video
@@ -371,35 +378,58 @@ const UserDashboard = () => {
                                     autoPlay
                                     muted
                                     playsInline
-                                    className="w-full h-full object-cover transition-all duration-500"
+                                    className="w-full h-full object-cover transition-all duration-500 scale-x-[-1]"
                                 />
-                                {/* Scanning Laser Animation */}
-                                {!scanPause && (
-                                    <div className="absolute inset-0 overflow-hidden pointer-events-none">
-                                        <div className="w-full h-1 bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.8)] absolute animate-[scanner_2s_ease-in-out_infinite]"></div>
-                                    </div>
-                                )}
-                                {/* No more blur overlay, keep camera clean */}
-                                {scanPause && (
-                                    <div className="absolute top-4 right-4 animate-bounce">
-                                        <div className="bg-emerald-500 text-black px-4 py-1 rounded-full font-black text-[10px] uppercase tracking-tighter shadow-lg">
-                                            Action Recorded
+                                
+                                {/* Biometric Ring */}
+                                <div className={`biometric-ring !w-[280px] !h-[340px] ${isFaceCentered ? 'active' : ''}`}></div>
+
+                                {/* Face Guide Widget Overlay */}
+                                <div className={`kiosk-face-guide !w-[240px] !h-[300px] ${isFaceCentered ? 'active' : ''}`}>
+                                    <div className="scan-mesh"></div>
+                                    <div className="face-corner face-corner-tl !w-8 !h-8 !border-t-4 !border-l-4"></div>
+                                    <div className="face-corner face-corner-tr !w-8 !h-8 !border-t-4 !border-r-4"></div>
+                                    <div className="face-corner face-corner-bl !w-8 !h-8 !border-b-4 !border-l-4"></div>
+                                    <div className="face-corner face-corner-br !w-8 !h-8 !border-b-4 !border-r-4"></div>
+                                    
+                                    {!isFaceDetected && (
+                                        <div className="absolute inset-0 flex items-center justify-center opacity-10">
+                                            <svg width="100" height="120" viewBox="0 0 200 250" fill="none">
+                                                <path d="M100 230C150 230 180 190 180 130C180 70 144 20 100 20C56 20 20 70 20 130C20 190 50 230 100 230Z" stroke="white" strokeWidth="8"/>
+                                            </svg>
                                         </div>
+                                    )}
+
+                                    {!scanPause && (
+                                        <>
+                                            <div className="scanner-line"></div>
+                                            <div className="scanner-line-secondary"></div>
+                                        </>
+                                    )}
+
+                                    {!isFaceCentered && (
+                                        <div className="absolute inset-0 flex items-center justify-center z-30">
+                                            <div className="bg-black/60 backdrop-blur-sm px-4 py-2 rounded-full border border-white/10 animate-pulse">
+                                                <p className="text-white font-black text-[10px] uppercase tracking-widest text-center">
+                                                    {instruction}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {scanPause && (
+                                    <div className="absolute inset-0 z-50 bg-emerald-600/80 flex flex-col items-center justify-center animate-in fade-in zoom-in">
+                                        <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mb-2">
+                                            <span className="text-3xl text-emerald-600">✓</span>
+                                        </div>
+                                        <p className="text-white font-black text-xs uppercase">Action Recorded</p>
                                     </div>
                                 )}
                             </>
                         ) : (
                             <div className="text-white/30 text-center px-4">
                                 <p className="text-sm font-bold uppercase tracking-widest">{faceStatus}</p>
-                            </div>
-                        )}
-                        
-                        {cameraActive && !scanPause && (
-                            <div className="absolute inset-0 border-2 border-emerald-500/30 m-4 rounded-xl pointer-events-none">
-                                <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-emerald-500 rounded-tl-lg"></div>
-                                <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-emerald-500 rounded-tr-lg"></div>
-                                <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-emerald-500 rounded-bl-lg"></div>
-                                <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-emerald-500 rounded-br-lg"></div>
                             </div>
                         )}
                     </div>
