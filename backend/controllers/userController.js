@@ -157,8 +157,8 @@ const loginUser = async (req, res) => {
 
             res.cookie(cookieName, token, {
                 httpOnly: true,
-                secure: true, // Always secure for sameSite 'none'
-                sameSite: 'none',
+                secure: false, // Set to false for HTTP deployments
+                sameSite: 'lax', // Use 'lax' for same-site or cross-port HTTP
                 maxAge: 29 * 24 * 60 * 60 * 1000 // 29 days
             });
 
