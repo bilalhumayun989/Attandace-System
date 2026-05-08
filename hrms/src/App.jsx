@@ -48,7 +48,7 @@ function App() {
   return (
     <AuthProvider>
       <PermissionsProvider>
-        <BrowserRouter basename="/attendance">
+        <BrowserRouter>
           <Routes>
             {/* Public Routes */}
             <Route path="/" element={<Landing />} />
