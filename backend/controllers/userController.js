@@ -159,6 +159,7 @@ const loginUser = async (req, res) => {
                 httpOnly: true,
                 secure: false, // Set to false for HTTP deployments
                 sameSite: 'lax', // Use 'lax' for same-site or cross-port HTTP
+                path: '/',
                 maxAge: 29 * 24 * 60 * 60 * 1000 // 29 days
             });
 

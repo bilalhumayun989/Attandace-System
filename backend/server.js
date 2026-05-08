@@ -18,8 +18,16 @@ connectDB().catch(err => console.error("Initial DB Connection failed:", err.mess
 const app = express();
 
 // Middleware
+// const allowedOrigins = [
+//     process.env.FRONTEND_URL?.replace(/\/$/, ''),
+//     'http://localhost:5173'
+// ].filter(Boolean);
+
 const allowedOrigins = [
-    process.env.FRONTEND_URL?.replace(/\/$/, ''),
+    // Extract just origin (scheme+host) from FRONTEND_URL, strip any path
+    process.env.FRONTEND_URL 
+        ? new URL(process.env.FRONTEND_URL).origin 
+        : null,
     'http://localhost:5173'
 ].filter(Boolean);
 
