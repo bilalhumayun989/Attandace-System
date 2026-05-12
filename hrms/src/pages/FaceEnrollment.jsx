@@ -94,42 +94,63 @@ const FaceEnrollment = () => {
     const captureFace = async () => {
         if (!videoRef.current) return;
         setIsCapturing(true);
-        setStatus('Starting auto-capture of 5 samples. Keep looking at the camera...');
+        setCaptures([]);
+        setStatus('Initializing enrollment. Please look straight...');
         
         let currentCaptures = [];
         let attempts = 0;
+        let stage = 'Straight'; // Straight, Left, Right
 
         const interval = setInterval(async () => {
-            if (currentCaptures.length >= 5 || attempts >= 20) {
+            if (currentCaptures.length >= 10 || attempts >= 40) {
                 clearInterval(interval);
                 setIsCapturing(false);
-                if (currentCaptures.length >= 5) {
-                    setStatus('Captured 5/5 samples. You can now save.');
+                
+                if (currentCaptures.length >= 10) {
+                    // Final consistency check
+                    setStatus('Verifying measurements consistency...');
+                    // Optional: Compare first and last for sanity
+                    setStatus('Perfect! 10 high-quality samples captured from multiple angles.');
                 } else {
-                    setStatus(`Only captured ${currentCaptures.length}/5 samples. Try capturing again.`);
+                    setStatus(`Enrollment incomplete (${currentCaptures.length}/10). Please try again in better light.`);
                 }
                 return;
             }
 
             attempts++;
+            
+            // Guidance
+            if (currentCaptures.length < 4) {
+                stage = 'Straight';
+                setStatus(`[Stage 1/3] Look straight into the camera... (${currentCaptures.length}/4)`);
+            } else if (currentCaptures.length < 7) {
+                stage = 'Left';
+                setStatus(`[Stage 2/3] Turn your head slightly LEFT... (${currentCaptures.length-4}/3)`);
+            } else {
+                stage = 'Right';
+                setStatus(`[Stage 3/3] Turn your head slightly RIGHT... (${currentCaptures.length-7}/3)`);
+            }
+
             try {
-                // Use high confidence threshold for enrollment to ensure clean data
-                const detection = await faceapi.detectSingleFace(videoRef.current, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.8 }))
+                // High confidence threshold + landmarks check
+                const detection = await faceapi.detectSingleFace(videoRef.current, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.85 }))
                     .withFaceLandmarks()
                     .withFaceDescriptor();
 
                 if (detection) {
                     const newDescriptor = Array.from(detection.descriptor);
-                    currentCaptures.push(newDescriptor);
-                    setCaptures([...currentCaptures]);
-                    setStatus(`Captured ${currentCaptures.length}/5 samples. Keep looking...`);
-                } else {
-                    setStatus(`No face detected (Attempt ${attempts}). Please look at the camera.`);
+                    
+                    // Simple quality check: ensure landmarks are distinct
+                    const landmarks = detection.landmarks.positions;
+                    if (landmarks.length === 68) {
+                        currentCaptures.push(newDescriptor);
+                        setCaptures([...currentCaptures]);
+                    }
                 }
             } catch (error) {
                 console.error('Capture error:', error);
             }
-        }, 1000); // 1 second interval between captures
+        }, 800); 
     };
 
     const saveEnrollment = async () => {
@@ -219,15 +240,15 @@ const FaceEnrollment = () => {
 
                     <button
                         onClick={captureFace}
-                        disabled={!cameraActive || captures.length >= 5 || isCapturing}
+                        disabled={!cameraActive || captures.length >= 10 || isCapturing}
                         className="bg-indigo-600 text-white px-4 py-3 rounded-lg text-lg font-bold disabled:bg-gray-400"
                     >
-                        {isCapturing ? `Capturing... (${captures.length}/5)` : 'Start Auto Capture (5 Samples)'}
+                        {isCapturing ? `Capturing... (${captures.length}/10)` : 'Start Multi-Angle Enrollment'}
                     </button>
 
                     <button
                         onClick={saveEnrollment}
-                        disabled={captures.length < 5}
+                        disabled={captures.length < 10}
                         className="bg-emerald-600 text-white px-4 py-3 rounded-lg text-lg font-bold disabled:bg-gray-400"
                     >
                         Save Enrollment

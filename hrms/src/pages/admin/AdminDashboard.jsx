@@ -74,8 +74,8 @@ const AdminDashboard = () => {
             const attendance = attendanceRes.ok ? await attendanceRes.json() : [];
             const statusData = statusRes.ok ? await statusRes.json() : null;
 
-            // 1. Process Total Employees (Only Employee role)
-            const employeesList = Array.isArray(users) ? users.filter(u => u.role === 'Employee') : [];
+            // 1. Process Total Employees (API already filters out Admins)
+            const employeesList = Array.isArray(users) ? users : [];
             const totalEmployees = employeesList.length;
 
             // 2. Process Today's Attendance & Late Arrivals
@@ -144,11 +144,25 @@ const AdminDashboard = () => {
                 const dateStr = `${yyyy}-${mm}-${dd}`;
                 const displayDay = d.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric' });
                 const dayRecords = Array.isArray(attendance) ? attendance.filter(a => a.date === dateStr) : [];
+                
+                const present = dayRecords.filter(a => a.status === 'Present').length;
+                const late = dayRecords.filter(a => a.status === 'Late').length;
+                
+                // If it's a future day or today and people haven't checked in yet, don't just mark them absent if it's today and early.
+                // But for simplicity in a 7-day chart, absent = total - present - late.
+                let absent = totalEmployees - present - late;
+                if (absent < 0) absent = 0;
+
+                // Don't show absents for future days or if totalEmployees is 0
+                if (totalEmployees === 0 || d > new Date()) {
+                    absent = 0;
+                }
+
                 last7Days.push({
                     name: displayDay,
-                    Present: dayRecords.filter(a => a.status === 'Present').length,
-                    Late: dayRecords.filter(a => a.status === 'Late').length,
-                    Absent: dayRecords.filter(a => a.status === 'Absent').length,
+                    Present: present,
+                    Late: late,
+                    Absent: absent,
                 });
             }
             setChartData(last7Days);
@@ -253,7 +267,74 @@ const AdminDashboard = () => {
                     description="arrived late today"
                     icon={AlertCircle}
                 />
+                <StatCard
+                    title="Completed Checkouts"
+                    value={Array.isArray(recentActivity) ? recentActivity.filter(a => a.checkOut).length.toString() : "0"}
+                    description="employees finished today"
+                    icon={CheckCircle}
+                />
+            </div>
 
+            <div className="grid gap-4 md:grid-cols-7 lg:grid-cols-7">
+                <Card className="col-span-4 hover:shadow-lg transition-shadow border-muted/40 bg-card/60 backdrop-blur">
+                    <CardHeader>
+                        <CardTitle>Attendance Overview (Last 7 Days)</CardTitle>
+                        <CardDescription>Visual representation of employee attendance.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="pl-2 h-[350px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={chartData} margin={{ top: 20, right: 30, left: 0, bottom: 5 }}>
+                                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" vertical={false} />
+                                <XAxis dataKey="name" className="text-xs" tickLine={false} axisLine={false} />
+                                <YAxis className="text-xs" tickLine={false} axisLine={false} />
+                                <Tooltip
+                                    contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.9)', borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)' }}
+                                    cursor={{fill: 'rgba(0, 0, 0, 0.04)'}}
+                                />
+                                <Legend wrapperStyle={{ paddingTop: '20px' }} />
+                                <Bar dataKey="Present" stackId="a" fill="hsl(142.1 76.2% 36.3%)" radius={[0, 0, 4, 4]} />
+                                <Bar dataKey="Late" stackId="a" fill="hsl(47.9 95.8% 53.1%)" />
+                                <Bar dataKey="Absent" stackId="a" fill="hsl(0 84.2% 60.2%)" radius={[4, 4, 0, 0]} />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </CardContent>
+                </Card>
+
+                <Card className="col-span-3 hover:shadow-lg transition-shadow border-muted/40 bg-card/60 backdrop-blur">
+                    <CardHeader>
+                        <CardTitle>Recent Activity</CardTitle>
+                        <CardDescription>Latest employee check-ins and check-outs today.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="space-y-6">
+                            {recentActivity.length > 0 ? (
+                                recentActivity.map((activity, index) => (
+                                    <div key={index} className="flex items-center">
+                                        <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10">
+                                            {activity.status === 'Present' ? <CheckCircle className="h-5 w-5 text-green-500" /> : 
+                                             activity.status === 'Late' ? <Clock className="h-5 w-5 text-yellow-500" /> : 
+                                             <AlertCircle className="h-5 w-5 text-red-500" />}
+                                        </div>
+                                        <div className="ml-4 space-y-1">
+                                            <p className="text-sm font-medium leading-none">{activity.userId?.name || 'Employee'}</p>
+                                            <p className="text-xs text-muted-foreground">
+                                                {activity.status} • Checked In: {formatActivityTime(activity.checkIn)}
+                                                {activity.checkOut ? ` • Checked Out: ${formatActivityTime(activity.checkOut)}` : ''}
+                                            </p>
+                                        </div>
+                                        <div className="ml-auto font-medium text-sm">
+                                            {activity.checkOut ? 'Completed' : 'Working'}
+                                        </div>
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="text-sm text-muted-foreground text-center py-8">
+                                    No activity recorded today.
+                                </div>
+                            )}
+                        </div>
+                    </CardContent>
+                </Card>
             </div>
         </div>
     );

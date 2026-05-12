@@ -205,9 +205,39 @@ const UserDashboard = () => {
     }, [cameraActive, faceMatcher, scanPause]);
 
     const speak = (text) => {
-        const utterance = new SpeechSynthesisUtterance(text);
+        const urduMapping = {
+            'shift time not start': 'shift ka waqt abhi shuru nahi hua',
+            'wait 5 min you are already checked in': 'panch minute intezar karein, aap pehle hi check in kar chuke hain',
+            'Please move closer to the camera': 'thoda qareeb aayein',
+            'Please center your face': 'apna chehra darmayan mein rakhein',
+            'User not registered': 'user registered nahi hai',
+            'Position your face': 'apna chehra sahi se samne rakhein',
+            'Hold Still...': 'thahrein'
+        };
+
+        let utteranceText = text;
+
+        if (text.includes('Welcome')) {
+            const name = text.split('Welcome ')[1]?.split(',')[0] || '';
+            if (text.includes('Overtime')) {
+                utteranceText = `${name}, aap ka overtime shuru ho gaya hai`;
+            } else {
+                utteranceText = `${name} khush amdeed, aap ki haazri lag gayi hai`;
+            }
+        } else if (text.includes('Goodbye')) {
+            const name = text.split('Goodbye ')[1]?.split(',')[0] || '';
+            if (text.includes('Overtime')) {
+                utteranceText = `${name}, aap ka overtime record ho gaya hai`;
+            } else {
+                utteranceText = `${name} khuda hafiz, aap check out ho gaye hain`;
+            }
+        } else if (urduMapping[text]) {
+            utteranceText = urduMapping[text];
+        }
+
+        const utterance = new SpeechSynthesisUtterance(utteranceText);
         utterance.rate = 1.0;
-        utterance.lang = 'en-US';
+        utterance.lang = 'ur-PK';
         window.speechSynthesis.speak(utterance);
     };
 
@@ -248,6 +278,10 @@ const UserDashboard = () => {
                     userCompletedRef.current[detectedUserId] = true;
                     setMessage({ type: 'success', text: msg });
                     speak(`${data.employeeName}, ${msg}`);
+                } else {
+                    // This handles 'none' (shift not started) or 'already_marked' (wait 5 min)
+                    setMessage({ type: 'error', text: msg });
+                    speak(msg);
                 }
                 
                 fetchInitialData(false); // Silent background update

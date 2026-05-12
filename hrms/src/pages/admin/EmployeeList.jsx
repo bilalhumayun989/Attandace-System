@@ -33,9 +33,6 @@ const EmployeeList = () => {
         employeeId: '',
         firstName: '',
         lastName: '',
-
-        email: '',
-        password: '',
         department: '',
         role: '',
         salary: '',
@@ -80,8 +77,6 @@ const EmployeeList = () => {
             employeeId: employee.employeeId || '',
             firstName,
             lastName: lastNameParts.join(' '),
-            email: employee.email,
-            password: '', // Don't pre-fill password
             department: employee.department,
             role: employee.role,
             salary: employee.salary || '',
@@ -108,8 +103,7 @@ const EmployeeList = () => {
                 body: JSON.stringify({
                     employeeId: formData.employeeId,
                     name: `${formData.firstName} ${formData.lastName}`,
-                    email: formData.email,
-                    password: formData.password,
+
                     department: formData.department,
                     role: formData.role,
                     workingHours: formData.workingHours,
@@ -154,8 +148,7 @@ const EmployeeList = () => {
                 credentials: 'include',
                 body: JSON.stringify({
                     name: `${formData.firstName} ${formData.lastName}`,
-                    email: formData.email,
-                    password: formData.password || undefined,
+
                     department: formData.department,
                     role: formData.role,
                     workingHours: formData.workingHours,
@@ -208,9 +201,6 @@ const EmployeeList = () => {
             employeeId: '',
             firstName: '',
             lastName: '',
-
-            email: '',
-            password: '',
             department: '',
             role: '',
             salary: '',
@@ -225,7 +215,6 @@ const EmployeeList = () => {
     const filteredEmployees = employees.filter(
         (emp) => emp.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
             (emp.employeeId && emp.employeeId.toLowerCase().includes(searchTerm.toLowerCase())) ||
-            emp.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
             emp.role.toLowerCase().includes(searchTerm.toLowerCase())
     );
 
@@ -382,14 +371,7 @@ const EmployeeList = () => {
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                        <div className="space-y-2">
-                            <label className="text-sm font-bold text-foreground/80">Email Address</label>
-                            <Input name="email" type="email" value={formData.email} onChange={handleInputChange} placeholder="john@company.com" className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all" />
-                        </div>
-                        <div className="space-y-2">
-                            <label className="text-sm font-bold text-foreground/80">Password {isEditModalOpen && <span className="text-[10px] text-muted-foreground">(Optional)</span>}</label>
-                            <Input name="password" type="password" value={formData.password} onChange={handleInputChange} placeholder="••••••••" className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all" />
-                        </div>
+
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">

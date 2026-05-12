@@ -72,9 +72,11 @@ def mark_attendance(user_id):
         url = f"{config.API_BASE_URL}/attendance/face-checkin"
         payload = {"userId": user_id, "timestamp": datetime.now().isoformat()}
         response = requests.post(url, json=payload)
-        if response.status_code == 200: return response.json()
-    except Exception as e: print(f"❌ API Error: {e}")
-    return None
+        # Return the JSON even if status_code is not 200 (to get error messages)
+        return response.json()
+    except Exception as e:
+        print(f"❌ API Error: {e}")
+        return {"message": "Connection Error", "action": "error"}
 
 def connect_camera():
     source = 0 if config.CAMERA_SOURCE == 0 else config.RTSP_URL
@@ -126,7 +128,8 @@ def main():
                     "center": center, "label": "unknown", "frames": 0, 
                     "yaw_history": [], "texture_history": [],
                     "blinked": False, "turned": False, "textured": False,
-                    "live": False, "marked": False, "last_seen": time.time()
+                    "live": False, "marked": False, "last_seen": time.time(),
+                    "api_message": ""
                 }
             
             face_data = tracked_faces[matched_id]
@@ -192,14 +195,38 @@ def main():
                         if time.time() - user_cooldowns.get(user_id, 0) > (config.COOLDOWN_MINUTES * 60):
                             result = mark_attendance(user_id)
                             if result:
-                                user_cooldowns[user_id] = time.time()
-                                face_data["marked"] = True
-                                print(f"✅ SUCCESS: {user_names.get(user_id)}")
-                        else: face_data["marked"] = True
+                                face_data["api_message"] = result.get('message', 'Unknown Response')
+                                if result.get('action') in ['checkin', 'checkout']:
+                                    user_cooldowns[user_id] = time.time()
+                                    face_data["marked"] = True
+                                    print(f"✅ SUCCESS: {user_names.get(user_id)} - {face_data['api_message']}")
+                                else:
+                                    # This covers 'none' (before shift) or 'already_marked' (cooldown)
+                                    # Set marked to True to stop spamming the API for this session
+                                    face_data["marked"] = True 
+                                    print(f"ℹ️ INFO: {user_names.get(user_id)} - {face_data['api_message']}")
+                            else:
+                                face_data["api_message"] = "Server Connection Error"
+                        else:
+                            face_data["marked"] = True
+                            face_data["api_message"] = "Wait 5 min (Kiosk Cooldown)"
+                else:
+                    # Clear message if person disappears or something, handled by cleanup
+                    pass
 
             # UI Styling
             color = (0, 255, 0) if face_data["marked"] else ((255, 165, 0) if face_data["live"] else (0, 0, 255))
-            status = "ACCESS GRANTED" if face_data["marked"] else ("MATCHING..." if face_data["live"] else "SPOOF CHECK")
+            
+            # Determine status text
+            if face_data.get("api_message"):
+                status = face_data["api_message"]
+            elif face_data["marked"]:
+                status = "ACCESS GRANTED"
+            elif face_data["live"]:
+                status = "MATCHING..."
+            else:
+                status = "SPOOF CHECK"
+
             cv2.rectangle(frame, (o_left, o_top), (o_right, o_bottom), color, 2)
             cv2.putText(frame, user_names.get(face_data["label"], "Scanning..."), (o_left, o_top-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
             cv2.putText(frame, status, (o_left, o_bottom+25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)

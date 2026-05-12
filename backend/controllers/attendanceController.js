@@ -18,7 +18,12 @@ const triggerManualReport = async (req, res) => {
 
 // Helper to get current PKT time
 const getPKTTime = (date = new Date()) => {
-    return new Date(formatInTimeZone(date, 'Asia/Karachi', "yyyy-MM-dd'T'HH:mm:ssXXX"));
+    // If date is a string and doesn't contain timezone info, assume it's PKT
+    if (typeof date === 'string' && !date.includes('Z') && !date.includes('+') && !date.includes('-')) {
+        // Append PKT offset (+05:00)
+        date = date + '+05:00';
+    }
+    return new Date(formatInTimeZone(new Date(date), 'Asia/Karachi', "yyyy-MM-dd'T'HH:mm:ssXXX"));
 };
 
 const getPKTDateString = (date = new Date()) => {
@@ -113,22 +118,16 @@ const checkIn = async (req, res) => {
             return res.status(400).json({ message: 'Already checked in today' });
         }
 
-        // Fix: Create startTime specifically in Asia/Karachi timezone to avoid local-time dependency
-        const startTimeStr = formatInTimeZone(pktNow, 'Asia/Karachi', `yyyy-MM-dd'T'${user.workingHours.start}:00XXX`);
-        const startTime = new Date(startTimeStr);
-
-        const diffInMs = pktNow - startTime;
-        const diffInMins = diffInMs / (1000 * 60);
-
         const startTime12h = format12h(user.workingHours.start);
 
-        // Attendance Rules:
-        // 1. Can check in up to 5 mins early.
-        if (diffInMins < -5) {
-            return res.status(400).json({ message: `Check-in not enabled yet. Please wait until ${startTime12h}` });
+        const shiftStartCheck = new Date(formatInTimeZone(pktNow, 'Asia/Karachi', `yyyy-MM-dd'T'${user.workingHours.start}:00XXX`));
+        if (pktNow < shiftStartCheck) {
+            return res.status(400).json({ message: 'shift time not start' });
         }
 
         // Late Threshold: 15 minutes grace period
+        const diffInMs = pktNow - shiftStartCheck;
+        const diffInMins = diffInMs / (1000 * 60);
         const status = diffInMins > 15 ? 'Late' : 'Present';
 
         if (!attendance) {
@@ -176,23 +175,48 @@ const checkOut = async (req, res) => {
             return res.status(400).json({ message: 'Already checked out today' });
         }
 
-        attendance.checkOut = pktNow;
+        // 5-minute cooldown between check-in and check-out
+        const checkInTimeObj = new Date(attendance.checkIn);
+        const timeDiffMins = (pktNow - checkInTimeObj) / (1000 * 60);
+        if (timeDiffMins < 5) {
+            return res.status(400).json({ message: 'wait 5 min you are already checked in' });
+        }
 
-        const checkInTime = new Date(attendance.checkIn);
-        const durationMs = pktNow - checkInTime;
-        const totalDurationMins = Math.floor(durationMs / (1000 * 60));
-        
-        attendance.duration = totalDurationMins > 0 ? totalDurationMins : 0;
-
-        // Calculate required duration (Shift duration)
+        // Determine shift duration and effective checkout
         const user = await User.findById(userId);
-        if (user && user.workingHours) {
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        let shiftDurationMins = 0;
+        if (user.workingHours) {
             const [startH, startM] = user.workingHours.start.split(':').map(Number);
             const [endH, endM] = user.workingHours.end.split(':').map(Number);
+            shiftDurationMins = (endH * 60 + endM) - (startH * 60 + startM);
+            if (shiftDurationMins < 0) shiftDurationMins += 24 * 60;
+        }
 
-            let shiftDurationMins = (endH * 60 + endM) - (startH * 60 + startM);
-            if (shiftDurationMins < 0) shiftDurationMins += 24 * 60; // Handle overnight shifts
+        const checkInTime = new Date(attendance.checkIn);
+        let effectiveCheckOut = pktNow;
 
+        if (user && !user.isOvertimeAllowed && user.workingHours) {
+            const shiftEndTime = new Date(formatInTimeZone(checkInTime, 'Asia/Karachi', `yyyy-MM-dd'T'${user.workingHours.end}:00XXX`));
+            const shiftStartTime = new Date(formatInTimeZone(checkInTime, 'Asia/Karachi', `yyyy-MM-dd'T'${user.workingHours.start}:00XXX`));
+            
+            if (shiftEndTime < shiftStartTime) {
+                shiftEndTime.setDate(shiftEndTime.getDate() + 1);
+            }
+
+            if (pktNow > shiftEndTime) {
+                effectiveCheckOut = shiftEndTime;
+            }
+        }
+        
+        attendance.checkOut = effectiveCheckOut;
+        const durationMs = effectiveCheckOut - checkInTime;
+        const totalDurationMins = Math.floor(durationMs / (1000 * 60));
+        attendance.duration = totalDurationMins > 0 ? totalDurationMins : 0;
+
+        // Calculate required duration (Shift duration) and update status
+        if (user.workingHours) {
             if (attendance.status === 'Late' && attendance.duration >= shiftDurationMins) {
                 attendance.status = 'Present';
             }
@@ -362,6 +386,18 @@ const overtimeIn = async (req, res) => {
         const userId = req.user._id;
         const pktNow = getPKTTime();
         const dateStr = getPKTDateString(pktNow);
+
+        const user = await User.findById(userId);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        // Shift Start Enforcement
+        if (user.workingHours) {
+            const shiftStartTime = new Date(formatInTimeZone(pktNow, 'Asia/Karachi', `yyyy-MM-dd'T'${user.workingHours.start}:00XXX`));
+            if (pktNow < shiftStartTime) {
+                return res.status(400).json({ message: 'shift time not start' });
+            }
+        }
+
         let attendance = await Attendance.findOne({ userId, date: dateStr });
         
         if (!attendance) {
@@ -476,11 +512,11 @@ const getFaceDescriptors = async (req, res) => {
 // @access  Public
 const faceCheckIn = async (req, res) => {
     try {
-        const { userId, timestamp } = req.body;
+        const { userId } = req.body;
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
 
-        const pktNow = getPKTTime(new Date(timestamp));
+        const pktNow = getPKTTime(); // Use server time for security
         const dateStr = getPKTDateString(pktNow);
 
         // Get Shift Boundaries
@@ -528,6 +564,15 @@ const faceCheckIn = async (req, res) => {
                 }
             }
 
+            // Check if shift hasn't started yet (Strict Enforcement)
+            if (shiftStartTime && pktNow < shiftStartTime) {
+                return res.json({
+                    action: 'none',
+                    employeeName: user.name,
+                    message: 'shift time not start'
+                });
+            }
+
             attendance = new Attendance({
                 userId,
                 date: dateStr,
@@ -556,15 +601,42 @@ const faceCheckIn = async (req, res) => {
         }
 
         if (attendance.checkIn && !attendance.checkOut) {
-            attendance.checkOut = pktNow;
-            attendance.markedByFace = true;
-
             const checkInTime = new Date(attendance.checkIn);
+            
+            // 5-minute cooldown between check-in and check-out
+            const timeDiffMins = (pktNow - checkInTime) / (1000 * 60);
+            if (timeDiffMins < 5) {
+                return res.json({
+                    action: 'already_marked',
+                    employeeName: user.name,
+                    message: 'wait 5 min you are already checked in'
+                });
+            }
+            let shiftDurationMins = 0;
+            if (user.workingHours) {
+                const [startH, startM] = user.workingHours.start.split(':').map(Number);
+                const [endH, endM] = user.workingHours.end.split(':').map(Number);
+                shiftDurationMins = (endH * 60 + endM) - (startH * 60 + startM);
+                if (shiftDurationMins < 0) shiftDurationMins += 24 * 60;
+            }
+
             let effectiveCheckOut = pktNow;
 
-            if (!user.isOvertimeAllowed && shiftEndTime && pktNow > shiftEndTime) {
-                effectiveCheckOut = shiftEndTime;
+            if (!user.isOvertimeAllowed && user.workingHours) {
+                const shiftEndTime = new Date(formatInTimeZone(checkInTime, 'Asia/Karachi', `yyyy-MM-dd'T'${user.workingHours.end}:00XXX`));
+                const shiftStartTime = new Date(formatInTimeZone(checkInTime, 'Asia/Karachi', `yyyy-MM-dd'T'${user.workingHours.start}:00XXX`));
+                
+                if (shiftEndTime < shiftStartTime) {
+                    shiftEndTime.setDate(shiftEndTime.getDate() + 1);
+                }
+
+                if (pktNow > shiftEndTime) {
+                    effectiveCheckOut = shiftEndTime;
+                }
             }
+
+            attendance.checkOut = effectiveCheckOut;
+            attendance.markedByFace = true;
 
             const regularDurationMs = Math.max(0, effectiveCheckOut - checkInTime);
             attendance.duration = Math.floor(regularDurationMs / (1000 * 60));
@@ -580,7 +652,7 @@ const faceCheckIn = async (req, res) => {
             return res.json({
                 action: 'checkout',
                 employeeName: user.name,
-                checkOutTime: format12h(formatInTimeZone(pktNow, 'Asia/Karachi', 'HH:mm')),
+                checkOutTime: format12h(formatInTimeZone(effectiveCheckOut, 'Asia/Karachi', 'HH:mm')),
                 message: user.isOvertimeAllowed && pktNow > shiftEndTime ? 'Check-out & Overtime Recorded' : 'Checked Out'
             });
         }

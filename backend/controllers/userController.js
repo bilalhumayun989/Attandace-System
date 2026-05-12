@@ -29,51 +29,18 @@ const generateToken = (id) => {
 // @access  Public (Should be protected by Admin middleware in production)
 const createEmployee = async (req, res) => {
     const { employeeId, name, email, password, role, department, workingHours, salary, extraHourlyRate, isOvertimeAllowed } = req.body;
-
-
     try {
         // 1. Check if user already exists
         const userExists = await User.findOne({ employeeId });
         if (userExists) {
             return res.status(400).json({ message: 'Employee ID already exists' });
         }
-
-
-        // 2. Send Email
-        const mailOptions = {
-            from: `"Brosh-Tech HRM" <${process.env.EMAIL_USER}>`,
-            to: email,
-            subject: 'Welcome to Brosh-Tech HRM - Your Account Credentials',
-            text: `Hi ${name},\n\nYour account has been created successfully.\n\nInform them your password and Employee ID for login into Brosh-Tech HRM is:\nEmployee ID: ${employeeId}\nPassword: ${password}\nYour Working Hours: ${workingHours.start} to ${workingHours.end}\nMonthly Salary: ${salary}\n\nPlease change your password after your first login.\n\nBest regards,\nAdmin Team`,
-
-            html: `
-        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-          <h2 style="color: #4f46e5;">Welcome to Brosh-Tech HRM</h2>
-          <p>Hi <strong>${name}</strong>,</p>
-          <p>Your account has been created successfully by the admin.</p>
-          <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <p style="margin: 0;"><strong>Login Credentials:</strong></p>
-            <p style="margin: 5px 0;"><strong>Employee ID:</strong> ${employeeId}</p>
-            <p style="margin: 5px 0;"><strong>Password:</strong> ${password}</p>
-
-            <p style="margin: 5px 0;"><strong>Working Hours:</strong> ${workingHours.start} to ${workingHours.end}</p>
-            <p style="margin: 5px 0;"><strong>Monthly Salary:</strong> ${salary}</p>
-          </div>
-          <p>You can now login into <a href="http://localhost:5173" style="color: #4f46e5; text-decoration: none; font-weight: bold;">Brosh-Tech HRM</a>.</p>
-          <p><em>Please make sure to change your password after your first login.</em></p>
-          <p>Best regards,<br>Admin Team</p>
-        </div>
-      `,
-        };
-
-        await transporter.sendMail(mailOptions);
-        console.log(`Welcome email sent to: ${email}`);
-
+        // 2. Generate a random password if not provided
+        const generatedPassword = password || Math.random().toString(36).slice(-8);
         // 3. Hash the password
         const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(password, salt);
-
-        // 4. Create User in DB
+        const hashedPassword = await bcrypt.hash(generatedPassword, salt);
+        // 4. Create User in DB (email is optional)
         const user = await User.create({
             employeeId,
             name,
@@ -82,26 +49,29 @@ const createEmployee = async (req, res) => {
             role,
             department,
             workingHours,
-            isVerified: true, // Employees created by admin are auto-verified
+            isVerified: true,
             salary: salary || 0,
             extraHourlyRate: extraHourlyRate || 0,
             isOvertimeAllowed: isOvertimeAllowed || false,
             adminId: req.adminId, // Scope to the tenant
         });
-
-
         if (user) {
+            // Only attempt to send email if a valid-looking email is provided
+            if (email && typeof email === 'string' && email.trim().includes('@')) {
+                const mailOptions = {
+                    from: `"Brosh-Tech HRM" <${process.env.EMAIL_USER}>`,
+                    to: email.trim(),
+                    subject: 'Your Account Credentials',
+                    text: `Your account has been created. Employee ID: ${employeeId}, Password: ${generatedPassword}`
+                };
+                await transporter.sendMail(mailOptions).catch(err => console.error('Email send error:', err));
+            }
             res.status(201).json({
                 _id: user._id,
+                employeeId: user.employeeId,
                 name: user.name,
                 email: user.email,
-                role: user.role,
-                department: user.department,
-                workingHours: user.workingHours,
-                salary: user.salary,
-                extraHourlyRate: user.extraHourlyRate,
-                isOvertimeAllowed: user.isOvertimeAllowed,
-                message: 'Employee created and email sent successfully',
+                message: 'Employee created successfully',
             });
         } else {
             res.status(400).json({ message: 'Invalid user data' });
@@ -132,16 +102,17 @@ const getEmployees = async (req, res) => {
 const loginUser = async (req, res) => {
     const { id, password } = req.body; // 'id' can be email or employeeId
     try {
-        // Try finding by employeeId OR email
+        // Find user by employeeId OR email
         let user = await User.findOne({
             $or: [
                 { employeeId: id },
                 { email: { $regex: new RegExp(`^${id}$`, 'i') } }
             ]
         });
-
-
-
+        // Ensure only admins can login
+        if (user && user.role !== 'Admin') {
+            return res.status(401).json({ message: 'Only admin users can login.' });
+        }
         if (user && (await bcrypt.compare(password, user.password))) {
             // Check if user is verified
             if (!user.isVerified) {
@@ -218,31 +189,33 @@ const registerAdmin = async (req, res) => {
 
 
         if (user) {
-            // Send verification email
-            const baseUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'http://localhost:5173';
-            const verificationUrl = `${baseUrl}/verify-email/${verificationToken}`;
-            
-            const mailOptions = {
-                from: `"Brosh-Tech HRM" <${process.env.EMAIL_USER}>`,
-                to: email,
-                subject: 'Verify Your Email - Brosh-Tech HRM',
-                html: `
-                    <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                        <h2 style="color: #4f46e5;">Welcome to Brosh-Tech HRM</h2>
-                        <p>Hi <strong>${name}</strong>,</p>
-                        <p>Thank you for registering. Please verify your email address to activate your account.</p>
-                        <div style="margin: 30px 0;">
-                            <a href="${verificationUrl}" style="background-color: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;">Verify Email Address</a>
+            // Send verification email only if valid email is provided
+            if (email && typeof email === 'string' && email.trim().includes('@')) {
+                const baseUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'http://localhost:5173';
+                const verificationUrl = `${baseUrl}/verify-email/${verificationToken}`;
+                
+                const mailOptions = {
+                    from: `"Brosh-Tech HRM" <${process.env.EMAIL_USER}>`,
+                    to: email.trim(),
+                    subject: 'Verify Your Email - Brosh-Tech HRM',
+                    html: `
+                        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                            <h2 style="color: #4f46e5;">Welcome to Brosh-Tech HRM</h2>
+                            <p>Hi <strong>${name}</strong>,</p>
+                            <p>Thank you for registering. Please verify your email address to activate your account.</p>
+                            <div style="margin: 30px 0;">
+                                <a href="${verificationUrl}" style="background-color: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;">Verify Email Address</a>
+                            </div>
+                            <p>If the button doesn't work, copy and paste this link into your browser:</p>
+                            <p>${verificationUrl}</p>
+                            <p>Best regards,<br>Team Brosh-Tech HRM</p>
                         </div>
-                        <p>If the button doesn't work, copy and paste this link into your browser:</p>
-                        <p>${verificationUrl}</p>
-                        <p>Best regards,<br>Team Brosh-Tech HRM</p>
-                    </div>
-                `,
-            };
+                    `,
+                };
 
-            await transporter.sendMail(mailOptions);
-            console.log(`Verification email sent to: ${email}`);
+                await transporter.sendMail(mailOptions);
+                console.log(`Verification email sent to: ${email}`);
+            }
 
             res.status(201).json({
                 message: 'Registration successful! Please check your email to verify your account.'

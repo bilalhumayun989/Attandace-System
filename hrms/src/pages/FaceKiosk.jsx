@@ -15,6 +15,8 @@ const FaceKiosk = () => {
     const [isFaceDetected, setIsFaceDetected] = useState(false);
     const [instruction, setInstruction] = useState('Position your face in the circle');
     const lastVocalGuidanceRef = useRef(0);
+    const consecutiveMatchCountRef = useRef(0);
+    const lastMatchedUserIdRef = useRef(null);
 
     useEffect(() => {
         const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -92,9 +94,43 @@ const FaceKiosk = () => {
     };
 
     const speak = (text) => {
-        const utterance = new SpeechSynthesisUtterance(text);
+        const urduMapping = {
+            'shift time not start': 'shift ka waqt abhi shuru nahi hua',
+            'wait 5 min you are already checked in': 'panch minute intezar karein, aap pehle hi check in kar chuke hain',
+            'Your attendance is already complete for today.': 'aap ki haazri aaj ke liye mukammal hai',
+            'Position your face in the circle': 'apna chehra circle mein rakhein',
+            'Please move closer to the camera': 'thoda qareeb aayein',
+            'Please center your face in the circle': 'apna chehra darmayan mein rakhein',
+            'Face Not Recognized': 'chehra pehchana nahi gaya',
+            'User not registered': 'user registered nahi hai',
+            'Looking for face...': 'chehra talash kar raha hoon',
+            'Verifying...': 'tasdeeq ho rahi hai'
+        };
+
+        let utteranceText = text;
+        
+        // Handle dynamic messages
+        if (text.includes('Welcome')) {
+            const name = text.split('Welcome ')[1]?.split(',')[0] || '';
+            if (text.includes('Overtime')) {
+                utteranceText = `${name}, aap ka overtime shuru ho gaya hai`;
+            } else {
+                utteranceText = `${name} khush amdeed, aap ki haazri lag gayi hai`;
+            }
+        } else if (text.includes('Goodbye')) {
+            const name = text.split('Goodbye ')[1]?.split(',')[0] || '';
+            if (text.includes('Overtime')) {
+                utteranceText = `${name}, aap ka overtime record ho gaya hai`;
+            } else {
+                utteranceText = `${name} khuda hafiz, aap check out ho gaye hain`;
+            }
+        } else if (urduMapping[text]) {
+            utteranceText = urduMapping[text];
+        }
+
+        const utterance = new SpeechSynthesisUtterance(utteranceText);
         utterance.rate = 0.95;
-        utterance.lang = 'en-US';
+        utterance.lang = 'ur-PK';
         window.speechSynthesis.speak(utterance);
     };
 
@@ -163,16 +199,33 @@ const FaceKiosk = () => {
                     setInstruction('Hold Still...');
                     
                     const match = faceMatcherRef.current.findBestMatch(detection.descriptor);
+                    
                     if (match.label !== 'unknown') {
                         const userId = match.label;
-                        const now = Date.now();
                         
-                        if (!cooldownRef.current[userId] || now - cooldownRef.current[userId] > 5000) {
-                            cooldownRef.current[userId] = now;
-                            processAttendance(userId);
+                        // Reliability check: require 2 consecutive matches for the same person
+                        if (lastMatchedUserIdRef.current === userId) {
+                            consecutiveMatchCountRef.current += 1;
+                        } else {
+                            lastMatchedUserIdRef.current = userId;
+                            consecutiveMatchCountRef.current = 1;
+                        }
+
+                        if (consecutiveMatchCountRef.current >= 2) {
+                            const now = Date.now();
+                            if (!cooldownRef.current[userId] || now - cooldownRef.current[userId] > 5000) {
+                                cooldownRef.current[userId] = now;
+                                processAttendance(userId);
+                            }
+                            // Reset count after processing
+                            consecutiveMatchCountRef.current = 0;
+                        } else {
+                            setInstruction('Verifying...');
                         }
                     } else {
                         setInstruction('Face Not Recognized');
+                        lastMatchedUserIdRef.current = null;
+                        consecutiveMatchCountRef.current = 0;
                     }
                 }
             } else {
@@ -211,6 +264,14 @@ const FaceKiosk = () => {
                     const msg = `${data.employeeName}, your attendance is already complete for today.`;
                     setStatusMessage(msg);
                     speak(`Hi ${data.employeeName}, your attendance is already complete for today`);
+                } else if (data.action === 'already_marked') {
+                    setStatusType('warning');
+                    setStatusMessage(data.message);
+                    speak(`Hi ${data.employeeName}, ${data.message}`);
+                } else if (data.action === 'none') {
+                    setStatusType('warning');
+                    setStatusMessage(data.message);
+                    speak(data.message);
                 }
 
                 // Reset message after 5 seconds
