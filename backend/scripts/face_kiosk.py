@@ -8,6 +8,40 @@ import time
 from datetime import datetime
 import config
 from scipy.spatial import distance as dist
+import threading
+import pyttsx3
+
+# --- Vocal Feedback ---
+def speak(text):
+    """Voice feedback in a separate thread to avoid UI lag."""
+    def _run_speak():
+        try:
+            engine = pyttsx3.init()
+            
+            speak_text = text
+            if "Welcome" in text:
+                name = text.split("Welcome ")[1].split("!")[0]
+                speak_text = f"Welcome {name}, you are checked in"
+            elif "Goodbye" in text:
+                name = text.split("Goodbye ")[1].split("!")[0]
+                speak_text = f"Goodbye {name}, you are checked out"
+            elif text == "SPOOF_DETECTED":
+                speak_text = "User face not found"
+            elif text == "shift time not start":
+                speak_text = "Shift time not started yet"
+            elif text == "wait 5 min you are already checked in":
+                speak_text = "Please wait 5 minutes"
+            elif "already completed" in text.lower():
+                speak_text = "Attendance already completed for today"
+            
+            engine.setProperty('rate', 150)
+            engine.say(speak_text)
+            engine.runAndWait()
+            engine.stop()
+        except Exception as e:
+            print(f"🔊 TTS Error: {e}")
+
+    threading.Thread(target=_run_speak, daemon=True).start()
 
 # --- Global State ---
 user_cooldowns = {}
@@ -129,7 +163,7 @@ def main():
                     "yaw_history": [], "texture_history": [],
                     "blinked": False, "turned": False, "textured": False,
                     "live": False, "marked": False, "last_seen": time.time(),
-                    "api_message": ""
+                    "api_message": "", "spoof_notified": False
                 }
             
             face_data = tracked_faces[matched_id]
@@ -153,6 +187,10 @@ def main():
                     cv2.putText(frame, f"SPOOF ALERT: {reason}", (o_left, o_top-40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                     # Draw a red warning box
                     cv2.rectangle(frame, (o_left, o_top), (o_right, o_bottom), (0, 0, 255), 4)
+                    
+                    if not face_data["spoof_notified"]:
+                        speak("SPOOF_DETECTED")
+                        face_data["spoof_notified"] = True
                     continue
 
             # --- 2. 3D POSE VERIFICATION (Anti-Static Photo) ---
@@ -196,20 +234,37 @@ def main():
                             result = mark_attendance(user_id)
                             if result:
                                 face_data["api_message"] = result.get('message', 'Unknown Response')
-                                if result.get('action') in ['checkin', 'checkout']:
+                                action = result.get('action')
+                                employee_name = user_names.get(user_id, "Employee")
+
+                                if action == 'checkin':
                                     user_cooldowns[user_id] = time.time()
                                     face_data["marked"] = True
-                                    print(f"✅ SUCCESS: {user_names.get(user_id)} - {face_data['api_message']}")
+                                    msg = f"Welcome {employee_name}!"
+                                    print(f"✅ SUCCESS: {employee_name} - Checked In")
+                                    speak(msg)
+                                elif action == 'checkout':
+                                    user_cooldowns[user_id] = time.time()
+                                    face_data["marked"] = True
+                                    msg = f"Goodbye {employee_name}!"
+                                    print(f"✅ SUCCESS: {employee_name} - Checked Out")
+                                    speak(msg)
                                 else:
-                                    # This covers 'none' (before shift) or 'already_marked' (cooldown)
-                                    # Set marked to True to stop spamming the API for this session
+                                    # This covers 'none' (before shift), 'completed' (after shift), or 'already_marked'
                                     face_data["marked"] = True 
-                                    print(f"ℹ️ INFO: {user_names.get(user_id)} - {face_data['api_message']}")
+                                    print(f"ℹ️ INFO: {employee_name} - {face_data['api_message']}")
+                                    speak(face_data["api_message"])
                             else:
                                 face_data["api_message"] = "Server Connection Error"
+                                speak("Server Connection Error")
                         else:
                             face_data["marked"] = True
                             face_data["api_message"] = "Wait 5 min (Kiosk Cooldown)"
+                            speak(face_data["api_message"])
+                    elif user_id == "unknown":
+                        # This avoids spamming 'User not registered'
+                        if face_data["frames"] == config.VALIDATION_FRAMES:
+                            speak("User not registered")
                 else:
                     # Clear message if person disappears or something, handled by cleanup
                     pass

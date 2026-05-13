@@ -205,39 +205,31 @@ const UserDashboard = () => {
     }, [cameraActive, faceMatcher, scanPause]);
 
     const speak = (text) => {
-        const urduMapping = {
-            'shift time not start': 'shift ka waqt abhi shuru nahi hua',
-            'wait 5 min you are already checked in': 'panch minute intezar karein, aap pehle hi check in kar chuke hain',
-            'Please move closer to the camera': 'thoda qareeb aayein',
-            'Please center your face': 'apna chehra darmayan mein rakhein',
-            'User not registered': 'user registered nahi hai',
-            'Position your face': 'apna chehra sahi se samne rakhein',
-            'Hold Still...': 'thahrein'
-        };
-
         let utteranceText = text;
 
         if (text.includes('Welcome')) {
             const name = text.split('Welcome ')[1]?.split(',')[0] || '';
             if (text.includes('Overtime')) {
-                utteranceText = `${name}, aap ka overtime shuru ho gaya hai`;
+                utteranceText = `${name}, your overtime has started`;
             } else {
-                utteranceText = `${name} khush amdeed, aap ki haazri lag gayi hai`;
+                utteranceText = `Welcome ${name}, you are checked in`;
             }
         } else if (text.includes('Goodbye')) {
             const name = text.split('Goodbye ')[1]?.split(',')[0] || '';
             if (text.includes('Overtime')) {
-                utteranceText = `${name}, aap ka overtime record ho gaya hai`;
+                utteranceText = `${name}, your overtime has been recorded`;
             } else {
-                utteranceText = `${name} khuda hafiz, aap check out ho gaye hain`;
+                utteranceText = `Goodbye ${name}, you are checked out`;
             }
-        } else if (urduMapping[text]) {
-            utteranceText = urduMapping[text];
+        } else if (text === 'shift time not start') {
+            utteranceText = 'Shift time not started yet';
+        } else if (text === 'wait 5 min you are already checked in') {
+            utteranceText = 'Please wait 5 minutes, you are already checked in';
         }
 
         const utterance = new SpeechSynthesisUtterance(utteranceText);
         utterance.rate = 1.0;
-        utterance.lang = 'ur-PK';
+        utterance.lang = 'en-US';
         window.speechSynthesis.speak(utterance);
     };
 

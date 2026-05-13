@@ -94,43 +94,34 @@ const FaceKiosk = () => {
     };
 
     const speak = (text) => {
-        const urduMapping = {
-            'shift time not start': 'shift ka waqt abhi shuru nahi hua',
-            'wait 5 min you are already checked in': 'panch minute intezar karein, aap pehle hi check in kar chuke hain',
-            'Your attendance is already complete for today.': 'aap ki haazri aaj ke liye mukammal hai',
-            'Position your face in the circle': 'apna chehra circle mein rakhein',
-            'Please move closer to the camera': 'thoda qareeb aayein',
-            'Please center your face in the circle': 'apna chehra darmayan mein rakhein',
-            'Face Not Recognized': 'chehra pehchana nahi gaya',
-            'User not registered': 'user registered nahi hai',
-            'Looking for face...': 'chehra talash kar raha hoon',
-            'Verifying...': 'tasdeeq ho rahi hai'
-        };
-
         let utteranceText = text;
         
         // Handle dynamic messages
         if (text.includes('Welcome')) {
             const name = text.split('Welcome ')[1]?.split(',')[0] || '';
             if (text.includes('Overtime')) {
-                utteranceText = `${name}, aap ka overtime shuru ho gaya hai`;
+                utteranceText = `${name}, your overtime has started`;
             } else {
-                utteranceText = `${name} khush amdeed, aap ki haazri lag gayi hai`;
+                utteranceText = `Welcome ${name}, you are checked in`;
             }
         } else if (text.includes('Goodbye')) {
             const name = text.split('Goodbye ')[1]?.split(',')[0] || '';
             if (text.includes('Overtime')) {
-                utteranceText = `${name}, aap ka overtime record ho gaya hai`;
+                utteranceText = `${name}, your overtime has been recorded`;
             } else {
-                utteranceText = `${name} khuda hafiz, aap check out ho gaye hain`;
+                utteranceText = `Goodbye ${name}, you are checked out`;
             }
-        } else if (urduMapping[text]) {
-            utteranceText = urduMapping[text];
+        } else if (text === 'shift time not start') {
+            utteranceText = 'Shift time not started yet';
+        } else if (text === 'wait 5 min you are already checked in') {
+            utteranceText = 'Please wait 5 minutes, you are already checked in';
+        } else if (text.includes('already complete')) {
+            utteranceText = 'Your attendance is already complete for today';
         }
 
         const utterance = new SpeechSynthesisUtterance(utteranceText);
         utterance.rate = 0.95;
-        utterance.lang = 'ur-PK';
+        utterance.lang = 'en-US';
         window.speechSynthesis.speak(utterance);
     };
 
