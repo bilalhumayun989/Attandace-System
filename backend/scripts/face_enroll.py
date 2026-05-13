@@ -55,7 +55,7 @@ def login_admin():
     password = input("Password: ")
     try:
         response = requests.post(f"{config.API_BASE_URL}/users/login", json={
-            "email": email,
+            "id": email,
             "password": password
         })
         if response.status_code == 200:

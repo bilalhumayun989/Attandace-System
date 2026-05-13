@@ -142,7 +142,8 @@ const loginUser = async (req, res) => {
                 role: user.role,
                 department: user.department,
                 workingHours: user.workingHours,
-                salary: user.salary
+                salary: user.salary,
+                token: token
             });
         } else {
             res.status(401).json({ message: 'Invalid ID/Email or password' });
