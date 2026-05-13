@@ -14,13 +14,17 @@ const protect = async (req, res, next) => {
 
     const roleContext = req.headers['x-role-context'];
 
-    // Check cookies for token, prioritize based on context if available
-    if (roleContext === 'Admin' && req.cookies.jwt_admin) {
+    // 1. Check Authorization header (Standard for scripts/mobile)
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+        token = req.headers.authorization.split(' ')[1];
+    } 
+    // 2. Check cookies (Standard for browsers)
+    else if (roleContext === 'Admin' && req.cookies.jwt_admin) {
         token = req.cookies.jwt_admin;
     } else if (roleContext === 'Employee' && req.cookies.jwt_employee) {
         token = req.cookies.jwt_employee;
     } else {
-        // Fallback: order of priority
+        // Fallback: order of priority for cookies
         token = req.cookies.jwt_admin || req.cookies.jwt_employee;
     }
 
