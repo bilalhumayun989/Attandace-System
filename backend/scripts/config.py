@@ -1,10 +1,10 @@
 # Biometric Kiosk Configuration
 # CAMERA_SOURCE: 0 for Laptop Webcam, RTSP URL for Production
-CAMERA_SOURCE = 0  # Default to laptop testing
+CAMERA_SOURCE = "rtsp"  # Default to laptop testing
 
 # RTSP Format for Hikvision:
 # rtsp://admin:PASSWORD@CAMERA_IP:554/Streaming/Channels/102 (Sub-stream)
-RTSP_URL = "rtsp://admin:PASSWORD@192.168.1.64:554/Streaming/Channels/102"
+RTSP_URL = "rtsp://admin:12345aabc@192.168.10.207/cam/realmonitor?channel=1&subtype=1"
 
 # Recognition Settings (Industrial Grade)
 # Recognition Settings (Industrial Grade)

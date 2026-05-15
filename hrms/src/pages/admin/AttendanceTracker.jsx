@@ -352,10 +352,13 @@ const AttendanceTracker = () => {
                                             <td className="px-6 py-4 font-bold text-primary">{calculateHours(record.duration)}</td>
                                             <td className="px-6 py-4 text-center">
                                                 <Badge variant={
+                                                    (record.checkIn && !record.checkOut) ? 'destructive' :
                                                     record.status === 'Present' ? 'success' : 
                                                     record.status === 'Late' ? 'warning' : 
                                                     'destructive'
-                                                }>{record.status}</Badge>
+                                                }>
+                                                    {(record.checkIn && !record.checkOut) ? 'Missed Checkout' : record.status}
+                                                </Badge>
                                             </td>
                                             <td className="px-6 py-4 text-right">
                                                 <Button 

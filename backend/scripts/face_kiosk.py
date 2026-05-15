@@ -1,301 +1,608 @@
 # pyrefly: ignore [missing-import]
+# ╔══════════════════════════════════════════════════════════════╗
+# ║        ZERO-SPOOF BIOMETRIC ATTENDANCE KIOSK v3.0           ║
+# ║              Production Ready — Factory Grade                ║
+# ╚══════════════════════════════════════════════════════════════╝
+
 import cv2
-# pyrefly: ignore [missing-import]
 import face_recognition
 import numpy as np
 import requests
 import time
+import threading
+import queue
+import pyttsx3
 from datetime import datetime
+from PIL import Image, ImageTk, ImageDraw
+import tkinter as tk
 import config
 from scipy.spatial import distance as dist
-import threading
-import pyttsx3
 
-# --- Vocal Feedback ---
-def speak(text):
-    """Voice feedback in a separate thread to avoid UI lag."""
-    def _run_speak():
+# ── Change this to your company name ──────────────────────────
+COMPANY_NAME  = "FACTORY ATTENDANCE SYSTEM"
+OVERLAY_SECS  = 5      # Seconds to show result screen
+
+# ── Colors ────────────────────────────────────────────────────
+BG      = '#0d0d0d'
+HDR     = '#161616'
+GREEN   = '#00C853'
+BLUE    = '#1565C0'
+ORANGE  = '#E65100'
+RED     = '#B71C1C'
+PURPLE  = '#4A148C'
+YELLOW  = '#F9A825'
+WHITE   = '#FFFFFF'
+LGRAY   = '#888888'
+DGRAY   = '#2a2a2a'
+
+# ══════════════════════════════════════════════════════════════
+#  VOICE ENGINE  (queue-based — Windows safe)
+# ══════════════════════════════════════════════════════════════
+_vq          = queue.Queue()
+_last_spoken = {}
+
+def _voice_worker():
+    tts = pyttsx3.init()
+    tts.setProperty('rate', 155)
+    tts.setProperty('volume', 1.0)
+    # Prefer a clear English voice
+    for v in tts.getProperty('voices'):
+        if any(n in v.name.lower() for n in ['zira','david','hazel','george']):
+            tts.setProperty('voice', v.id)
+            break
+    while True:
+        txt = _vq.get()
+        if txt is None:
+            break
         try:
-            engine = pyttsx3.init()
-            
-            speak_text = text
-            if "Welcome" in text:
-                name = text.split("Welcome ")[1].split("!")[0]
-                speak_text = f"Welcome {name}, you are checked in"
-            elif "Goodbye" in text:
-                name = text.split("Goodbye ")[1].split("!")[0]
-                speak_text = f"Goodbye {name}, you are checked out"
-            elif text == "SPOOF_DETECTED":
-                speak_text = "User face not found"
-            elif text == "shift time not start":
-                speak_text = "Shift time not started yet"
-            elif text == "wait 5 min you are already checked in":
-                speak_text = "Please wait 5 minutes"
-            elif "already completed" in text.lower():
-                speak_text = "Attendance already completed for today"
-            
-            engine.setProperty('rate', 150)
-            engine.say(speak_text)
-            engine.runAndWait()
-            engine.stop()
-        except Exception as e:
-            print(f"🔊 TTS Error: {e}")
+            tts.say(txt)
+            tts.runAndWait()
+        except Exception:
+            pass
+        _vq.task_done()
 
-    threading.Thread(target=_run_speak, daemon=True).start()
+threading.Thread(target=_voice_worker, daemon=True).start()
 
-# --- Global State ---
+def speak(text, key=None, cd=5):
+    """Put text in voice queue. key+cd prevents repeating same line."""
+    now = time.time()
+    if key and now - _last_spoken.get(key, 0) < cd:
+        return
+    if key:
+        _last_spoken[key] = now
+    # Drop stale queued phrases so new instruction plays immediately
+    while not _vq.empty():
+        try: _vq.get_nowait()
+        except: pass
+    _vq.put(text)
+
+# ══════════════════════════════════════════════════════════════
+#  API
+# ══════════════════════════════════════════════════════════════
+user_names     = {}
 user_cooldowns = {}
-user_names = {}
-tracked_faces = {} 
-
-def calculate_ear(eye):
-    A = dist.euclidean(eye[1], eye[5])
-    B = dist.euclidean(eye[2], eye[4])
-    C = dist.euclidean(eye[0], eye[3])
-    ear = (A + B) / (2.0 * C)
-    return ear
-
-def get_face_yaw(landmarks):
-    left_eye = np.mean(landmarks['left_eye'], axis=0)
-    right_eye = np.mean(landmarks['right_eye'], axis=0)
-    nose_tip = landmarks['nose_bridge'][-1]
-    dist_l = dist.euclidean(nose_tip, left_eye)
-    dist_r = dist.euclidean(nose_tip, right_eye)
-    return dist_l / dist_r
-
-def check_texture(frame, top, right, bottom, left):
-    """Detect if the surface is a digital screen or photo using Laplacian Variance and Moiré analysis."""
-    face_img = frame[top:bottom, left:right]
-    if face_img.size == 0: return 0, 0
-    
-    gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
-    
-    # 1. Laplacian variance (Sharpness/Texture depth)
-    variance = cv2.Laplacian(gray, cv2.CV_64F).var()
-    
-    # 2. Moiré Pattern Detection (High-frequency noise from screens)
-    # Screens have periodic patterns that real skin lacks
-    dft = cv2.dft(np.float32(gray), flags=cv2.DFT_COMPLEX_OUTPUT)
-    dft_shift = np.fft.fftshift(dft)
-    magnitude_spectrum = 20 * np.log(cv2.magnitude(dft_shift[:, :, 0], dft_shift[:, :, 1]) + 1)
-    
-    # Analyze the high-frequency components
-    moire_score = np.mean(magnitude_spectrum)
-    
-    return variance, moire_score
 
 def get_employees():
     try:
-        response = requests.get(f"{config.API_BASE_URL}/attendance/face-descriptors")
-        if response.status_code == 200:
-            data = response.json()
-            employees = data.get('employees', [])
-            known_encodings, known_ids = [], []
-            for emp in employees:
-                user_names[emp['_id']] = emp['name']
-                for desc in emp['faceDescriptors']:
-                    known_encodings.append(np.array(desc))
-                    known_ids.append(emp['_id'])
-            return known_encodings, known_ids
-    except Exception as e:
-        print(f"❌ Error fetching employees: {e}")
+        r = requests.get(f"{config.API_BASE_URL}/attendance/face-descriptors", timeout=10)
+        if r.status_code == 200:
+            emps = r.json().get('employees', [])
+            enc, ids = [], []
+            for e in emps:
+                user_names[e['_id']] = e['name']
+                for d in e['faceDescriptors']:
+                    enc.append(np.array(d))
+                    ids.append(e['_id'])
+            print(f"✅ {len(emps)} employees loaded")
+            return enc, ids
+    except Exception as ex:
+        print(f"❌ API error: {ex}")
     return [], []
 
-def mark_attendance(user_id):
+def mark_attendance(uid):
     try:
-        url = f"{config.API_BASE_URL}/attendance/face-checkin"
-        payload = {"userId": user_id, "timestamp": datetime.now().isoformat()}
-        response = requests.post(url, json=payload)
-        # Return the JSON even if status_code is not 200 (to get error messages)
-        return response.json()
-    except Exception as e:
-        print(f"❌ API Error: {e}")
-        return {"message": "Connection Error", "action": "error"}
+        r = requests.post(
+            f"{config.API_BASE_URL}/attendance/face-checkin",
+            json={"userId": uid, "timestamp": datetime.now().isoformat()},
+            timeout=10
+        )
+        if r.status_code == 200:
+            return r.json()
+    except Exception as ex:
+        print(f"❌ API error: {ex}")
+    return None
 
-def connect_camera():
-    source = 0 if config.CAMERA_SOURCE == 0 else config.RTSP_URL
-    cap = cv2.VideoCapture(source)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    return cap, source
+# ══════════════════════════════════════════════════════════════
+#  ANTI-SPOOF HELPERS
+# ══════════════════════════════════════════════════════════════
+def calc_ear(eye):
+    A = dist.euclidean(eye[1], eye[5])
+    B = dist.euclidean(eye[2], eye[4])
+    C = dist.euclidean(eye[0], eye[3])
+    return (A + B) / (2.0 * C)
 
-def main():
-    print("--- [ZERO-SPOOF] Biometric Kiosk ---")
-    known_encodings, known_ids = get_employees()
-    if not known_encodings: return
+def calc_yaw(lm):
+    le = np.mean(lm['left_eye'],   axis=0)
+    re = np.mean(lm['right_eye'],  axis=0)
+    nt = lm['nose_bridge'][-1]
+    return dist.euclidean(nt, le) / (dist.euclidean(nt, re) + 1e-6)
 
-    cap, source = connect_camera()
-    if not cap.isOpened(): return
+def calc_texture(frame, t, r, b, l):
+    roi = frame[t:b, l:r]
+    if roi.size == 0:
+        return 0, 0
+    g   = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    var = cv2.Laplacian(g, cv2.CV_64F).var()
+    dft = cv2.dft(np.float32(g), flags=cv2.DFT_COMPLEX_OUTPUT)
+    ds  = np.fft.fftshift(dft)
+    ms  = 20 * np.log(cv2.magnitude(ds[:,:,0], ds[:,:,1]) + 1)
+    return var, np.mean(ms)
 
-    next_cleanup = time.time() + 30
+def hex2bgr(h):
+    h = h.lstrip('#')
+    return (int(h[4:6],16), int(h[2:4],16), int(h[0:2],16))
 
-    while True:
-        ret, frame = cap.read()
+# ══════════════════════════════════════════════════════════════
+#  KIOSK APPLICATION
+# ══════════════════════════════════════════════════════════════
+class KioskApp:
+    def __init__(self, root, enc, ids):
+        self.root   = root
+        self.enc    = enc
+        self.ids    = ids
+        self.faces  = {}
+        self.photo  = None
+        self.overlay_until = 0
+        self.fc     = 0        # frame counter
+
+        self._build_ui()
+        self._open_camera()
+        self._update_clock()
+        self._loop()
+
+    # ─────────────────────────────────────────────────────────
+    #  UI CONSTRUCTION
+    # ─────────────────────────────────────────────────────────
+    def _build_ui(self):
+        self.root.configure(bg=BG)
+        self.root.attributes('-fullscreen', True)
+        self.root.attributes('-topmost',    True)
+        self.root.protocol("WM_DELETE_WINDOW", lambda: None)
+        self.root.bind('<Alt-F4>', lambda e: 'break')
+        self.root.bind('<Escape>', lambda e: 'break')
+        self.root.bind('<F11>',    lambda e: 'break')
+
+        # ── HEADER ──────────────────────────────────────────
+        hdr = tk.Frame(self.root, bg=HDR, height=85)
+        hdr.pack(fill='x')
+        hdr.pack_propagate(False)
+
+        tk.Label(hdr, text="🏭", font=('Segoe UI Emoji',26),
+                 bg=HDR, fg=GREEN).pack(side='left', padx=(18,6), pady=18)
+        tk.Label(hdr, text=COMPANY_NAME, font=('Arial',24,'bold'),
+                 bg=HDR, fg=WHITE).pack(side='left', pady=18)
+
+        right = tk.Frame(hdr, bg=HDR)
+        right.pack(side='right', padx=22, pady=10)
+        self.lbl_time = tk.Label(right, font=('Arial',22,'bold'), bg=HDR, fg=WHITE)
+        self.lbl_time.pack()
+        self.lbl_date = tk.Label(right, font=('Arial',12),        bg=HDR, fg=LGRAY)
+        self.lbl_date.pack()
+
+        # ── CAMERA CANVAS ───────────────────────────────────
+        self.cam_canvas = tk.Canvas(self.root, bg='black', highlightthickness=0)
+        self.cam_canvas.pack(fill='both', expand=True)
+
+        # ── RESULT OVERLAY (hidden until needed) ────────────
+        self.ov = tk.Frame(self.root, bg=GREEN)
+        self.ov.pack_propagate(False)
+
+        self.ov_icon   = tk.Label(self.ov, font=('Segoe UI Emoji',100), bg=GREEN)
+        self.ov_icon.pack(pady=(50,0))
+
+        self.ov_title  = tk.Label(self.ov, font=('Arial',52,'bold'), bg=GREEN, fg=WHITE)
+        self.ov_title.pack(pady=(0,6))
+
+        self.ov_name   = tk.Label(self.ov, font=('Arial',44,'bold'), bg=GREEN, fg=WHITE)
+        self.ov_name.pack(pady=(0,8))
+
+        self.ov_msg    = tk.Label(self.ov, font=('Arial',26), bg=GREEN,
+                                  fg='#eeeeee', wraplength=1000, justify='center')
+        self.ov_msg.pack(pady=(0,6))
+
+        self.ov_time   = tk.Label(self.ov, font=('Arial',18), bg=GREEN, fg='#cccccc')
+        self.ov_time.pack()
+
+        # Countdown bar
+        pb_wrap = tk.Frame(self.ov, bg=GREEN)
+        pb_wrap.pack(fill='x', padx=150, pady=28)
+        self.pb = tk.Canvas(pb_wrap, height=14, highlightthickness=0)
+        self.pb.pack(fill='x')
+
+        # ── STATUS BAR ──────────────────────────────────────
+        sb = tk.Frame(self.root, bg=HDR, height=100)
+        sb.pack(fill='x')
+        sb.pack_propagate(False)
+
+        # Step dots
+        steps_f = tk.Frame(sb, bg=HDR)
+        steps_f.pack(pady=(10,2))
+        self.step_labels = []
+        step_names = ['Surface Check', 'Head Turn', 'Blink', 'Scanning']
+        step_icons = ['🛡️', '↔', '👁', '🔍']
+        for i, (ic, nm) in enumerate(zip(step_icons, step_names)):
+            col_f = tk.Frame(steps_f, bg=HDR)
+            col_f.pack(side='left', padx=22)
+            dot = tk.Label(col_f, text='●', font=('Arial',20), bg=HDR, fg=DGRAY)
+            dot.pack()
+            lbl = tk.Label(col_f, text=f"{ic} {nm}", font=('Arial',11), bg=HDR, fg=LGRAY)
+            lbl.pack()
+            self.step_labels.append((dot, lbl))
+
+        self.lbl_status = tk.Label(sb, font=('Arial',19,'bold'),
+                                   bg=HDR, fg=GREEN,
+                                   text="👤  PLEASE STAND IN FRONT OF THE CAMERA")
+        self.lbl_status.pack(pady=(2,8))
+
+    # ─────────────────────────────────────────────────────────
+    #  CAMERA
+    # ─────────────────────────────────────────────────────────
+    def _open_camera(self):
+        src = 0 if config.CAMERA_SOURCE == 0 else config.RTSP_URL
+        self.cap = cv2.VideoCapture(src)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        if not self.cap.isOpened():
+            self._status("❌  CAMERA NOT CONNECTED — PLEASE CHECK", RED)
+            speak("Camera is not connected. Please check the camera.")
+
+    # ─────────────────────────────────────────────────────────
+    #  CLOCK
+    # ─────────────────────────────────────────────────────────
+    def _update_clock(self):
+        now = datetime.now()
+        self.lbl_time.config(text=now.strftime("%I:%M:%S %p"))
+        self.lbl_date.config(text=now.strftime("%A,  %d %B %Y"))
+        self.root.after(1000, self._update_clock)
+
+    # ─────────────────────────────────────────────────────────
+    #  MAIN LOOP
+    # ─────────────────────────────────────────────────────────
+    def _loop(self):
+        # Overlay countdown
+        if self.ov.winfo_ismapped():
+            rem = self.overlay_until - time.time()
+            if rem <= 0:
+                self._hide_ov()
+            else:
+                self._draw_pb(rem)
+            self.root.after(30, self._loop)
+            return
+
+        if not self.cap.isOpened():
+            self.root.after(500, self._loop)
+            return
+
+        ret, frame = self.cap.read()
         if not ret:
-            cap.release()
-            time.sleep(2)
-            cap, source = connect_camera()
-            continue
+            self.cap.release()
+            time.sleep(1)
+            self._open_camera()
+            self.root.after(30, self._loop)
+            return
 
-        # Process at 0.25x for speed, but check texture on full resolution
-        small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
-        rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+        self.fc += 1
 
-        face_locations = face_recognition.face_locations(rgb_small_frame, model="hog")
-        face_landmarks_list = face_recognition.face_landmarks(rgb_small_frame, face_locations)
-        face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
+        # Run face pipeline every 2nd frame (balance speed vs accuracy)
+        if self.fc % 2 == 0:
+            sm = cv2.resize(frame, (0,0), fx=0.25, fy=0.25)
+            rgb = cv2.cvtColor(sm, cv2.COLOR_BGR2RGB)
+            locs = face_recognition.face_locations(rgb, model="hog")
+            lms  = face_recognition.face_landmarks(rgb, locs)
+            encs = face_recognition.face_encodings(rgb, locs)
 
-        for (top, right, bottom, left), face_landmarks, face_encoding in zip(face_locations, face_landmarks_list, face_encodings):
-            # Scale coordinates back to original frame
-            o_top, o_right, o_bottom, o_left = top*4, right*4, bottom*4, left*4
-            center = ( (o_left + o_right) // 2, (o_top + o_bottom) // 2 )
-            
-            # Tracking
-            matched_id = None
-            for fid, data in tracked_faces.items():
-                if dist.euclidean(center, data["center"]) < 80:
-                    matched_id = fid
-                    break
-            
-            if not matched_id:
-                matched_id = f"face_{int(time.time() * 1000)}"
-                tracked_faces[matched_id] = {
-                    "center": center, "label": "unknown", "frames": 0, 
-                    "yaw_history": [], "texture_history": [],
-                    "blinked": False, "turned": False, "textured": False,
-                    "live": False, "marked": False, "last_seen": time.time(),
-                    "api_message": "", "spoof_notified": False
-                }
-            
-            face_data = tracked_faces[matched_id]
-            face_data["center"] = center
-            face_data["last_seen"] = time.time()
+            if not locs:
+                self.faces.clear()
+                self._status("👤  PLEASE STAND IN FRONT OF THE CAMERA", GREEN)
+                self._set_steps(-1)
+                speak("Please look at the camera.", key="idle", cd=10)
+            else:
+                self._pipeline(frame, locs, lms, encs)
 
-            # --- 1. TEXTURE & MOIRE ANALYSIS (Anti-Screen) ---
-            if not face_data["textured"]:
-                var, moire = check_texture(frame, o_top, o_right, o_bottom, o_left)
-                face_data["texture_history"].append(var)
-                if len(face_data["texture_history"]) > 10: face_data["texture_history"].pop(0)
-                
-                avg_var = np.mean(face_data["texture_history"])
-                
-                # REJECT if Moire is too high (Screen detected) or Variance is too low (Blurry/Flat photo)
-                if avg_var > config.TEXTURE_THRESHOLD and moire < config.MOIRE_THRESHOLD:
-                    face_data["textured"] = True
-                    print(f"🛡️ SURFACE VERIFIED")
+        self._render(frame)
+        self.root.after(30, self._loop)
+
+    # ─────────────────────────────────────────────────────────
+    #  FACE PIPELINE
+    # ─────────────────────────────────────────────────────────
+    def _pipeline(self, frame, locs, lms_list, encs):
+        now = time.time()
+
+        for (t,r,b,l), lm, enc in zip(locs, lms_list, encs):
+            ot,or_,ob,ol = t*4, r*4, b*4, l*4
+            center = ((ol+or_)//2, (ot+ob)//2)
+
+            # ── Track this face ──────────────────────────
+            fid = None
+            for k, d in self.faces.items():
+                if dist.euclidean(center, d['ctr']) < 100:
+                    fid = k; break
+            if not fid:
+                fid = f"f{int(now*1000)}"
+                self.faces[fid] = dict(
+                    ctr=center, label='unknown', frames=0,
+                    yaw_h=[], tex_h=[],
+                    textured=False, turned=False,
+                    blinked=False, live=False, marked=False, ts=now
+                )
+            fd = self.faces[fid]
+            fd['ctr'] = center
+            fd['ts']  = now
+
+            # Already done — just show green box
+            if fd['marked']:
+                self._box(frame, ol,ot,or_,ob, GREEN, "✓ ACCESS GRANTED",
+                          user_names.get(fd['label'],''))
+                self._set_steps(4)
+                continue
+
+            # ── STEP 1: Texture / Moiré ──────────────────
+            if not fd['textured']:
+                self._set_steps(0)
+                v, m = calc_texture(frame, ot,or_,ob,ol)
+                fd['tex_h'].append(v)
+                if len(fd['tex_h']) > 10: fd['tex_h'].pop(0)
+                avg = np.mean(fd['tex_h'])
+
+                if avg > config.TEXTURE_THRESHOLD and m < config.MOIRE_THRESHOLD:
+                    fd['textured'] = True
+                    speak("Please slowly turn your head left or right.")
                 else:
-                    reason = "SCREEN DETECTED" if moire >= config.MOIRE_THRESHOLD else "FLAT SURFACE"
-                    cv2.putText(frame, f"SPOOF ALERT: {reason}", (o_left, o_top-40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                    # Draw a red warning box
-                    cv2.rectangle(frame, (o_left, o_top), (o_right, o_bottom), (0, 0, 255), 4)
-                    
-                    if not face_data["spoof_notified"]:
-                        speak("SPOOF_DETECTED")
-                        face_data["spoof_notified"] = True
+                    reason = "SCREEN / PHONE DETECTED" if m >= config.MOIRE_THRESHOLD else "PHOTO DETECTED"
+                    self._box(frame, ol,ot,or_,ob, RED, reason, "")
+                    self._status(f"⚠   SPOOF: {reason} — USE YOUR REAL FACE", RED)
+                    speak("Please stand directly in front of camera with your real face.",
+                          key="spoof", cd=6)
                     continue
 
-            # --- 2. 3D POSE VERIFICATION (Anti-Static Photo) ---
-            if face_data["textured"] and not face_data["turned"]:
-                yaw = get_face_yaw(face_landmarks)
-                face_data["yaw_history"].append(yaw)
-                if len(face_data["yaw_history"]) > 15: face_data["yaw_history"].pop(0)
-                
-                yaw_range = max(face_data["yaw_history"]) - min(face_data["yaw_history"])
-                if yaw_range > config.POSE_YAW_THRESHOLD:
-                    face_data["turned"] = True
-                    print(f"🛡️ 3D MOTION VERIFIED")
-                
-                cv2.putText(frame, "VERIFYING 3D: TURN HEAD SLIGHTLY", (o_left, o_top-40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-
-            # --- 3. BLINK VERIFICATION (Anti-Video) ---
-            if face_data["turned"] and not face_data["blinked"]:
-                ear = (calculate_ear(face_landmarks['left_eye']) + calculate_ear(face_landmarks['right_eye'])) / 2.0
-                if ear < config.EYE_AR_THRESHOLD:
-                    face_data["blinked"] = True
-                    face_data["live"] = True
-                    print(f"🛡️ BLINK VERIFIED - LIVENESS CONFIRMED")
-                
-                cv2.putText(frame, "FINAL STEP: BLINK EYES", (o_left, o_top-40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-
-            # --- 4. RECOGNITION & MARK ---
-            if face_data["live"]:
-                # Only run heavy face recognition AFTER we are 100% sure it's a live person
-                if face_data["frames"] < config.VALIDATION_FRAMES:
-                    face_distances = face_recognition.face_distance(known_encodings, face_encoding)
-                    if len(face_distances) > 0:
-                        best_index = np.argmin(face_distances)
-                        if face_distances[best_index] < config.MATCH_THRESHOLD:
-                            face_data["label"], face_data["frames"] = known_ids[best_index], face_data["frames"] + 1
-                        else: face_data["label"], face_data["frames"] = "unknown", 0
-
-                if face_data["frames"] >= config.VALIDATION_FRAMES and not face_data["marked"]:
-                    user_id = face_data["label"]
-                    if user_id != "unknown":
-                        if time.time() - user_cooldowns.get(user_id, 0) > (config.COOLDOWN_MINUTES * 60):
-                            result = mark_attendance(user_id)
-                            if result:
-                                face_data["api_message"] = result.get('message', 'Unknown Response')
-                                action = result.get('action')
-                                employee_name = user_names.get(user_id, "Employee")
-
-                                if action == 'checkin':
-                                    user_cooldowns[user_id] = time.time()
-                                    face_data["marked"] = True
-                                    msg = f"Welcome {employee_name}!"
-                                    print(f"✅ SUCCESS: {employee_name} - Checked In")
-                                    speak(msg)
-                                elif action == 'checkout':
-                                    user_cooldowns[user_id] = time.time()
-                                    face_data["marked"] = True
-                                    msg = f"Goodbye {employee_name}!"
-                                    print(f"✅ SUCCESS: {employee_name} - Checked Out")
-                                    speak(msg)
-                                else:
-                                    # This covers 'none' (before shift), 'completed' (after shift), or 'already_marked'
-                                    face_data["marked"] = True 
-                                    print(f"ℹ️ INFO: {employee_name} - {face_data['api_message']}")
-                                    speak(face_data["api_message"])
-                            else:
-                                face_data["api_message"] = "Server Connection Error"
-                                speak("Server Connection Error")
-                        else:
-                            face_data["marked"] = True
-                            face_data["api_message"] = "Wait 5 min (Kiosk Cooldown)"
-                            speak(face_data["api_message"])
-                    elif user_id == "unknown":
-                        # This avoids spamming 'User not registered'
-                        if face_data["frames"] == config.VALIDATION_FRAMES:
-                            speak("User not registered")
+            # ── STEP 2: Head Turn ─────────────────────────
+            if not fd['turned']:
+                self._set_steps(1)
+                y = calc_yaw(lm)
+                fd['yaw_h'].append(y)
+                if len(fd['yaw_h']) > 20: fd['yaw_h'].pop(0)
+                rng = max(fd['yaw_h']) - min(fd['yaw_h'])
+                if rng > config.POSE_YAW_THRESHOLD:
+                    fd['turned'] = True
+                    speak("Good. Now please blink your eyes once.")
                 else:
-                    # Clear message if person disappears or something, handled by cleanup
-                    pass
+                    self._box(frame, ol,ot,or_,ob, YELLOW, "TURN HEAD SLOWLY", "")
+                    self._status("↔   SLOWLY TURN YOUR HEAD LEFT OR RIGHT", YELLOW)
+                    speak("Please turn your head slightly left or right.",
+                          key=f"turn_{fid}", cd=5)
+                    continue
 
-            # UI Styling
-            color = (0, 255, 0) if face_data["marked"] else ((255, 165, 0) if face_data["live"] else (0, 0, 255))
-            
-            # Determine status text
-            if face_data.get("api_message"):
-                status = face_data["api_message"]
-            elif face_data["marked"]:
-                status = "ACCESS GRANTED"
-            elif face_data["live"]:
-                status = "MATCHING..."
+            # ── STEP 3: Blink ─────────────────────────────
+            if not fd['blinked']:
+                self._set_steps(2)
+                e = (calc_ear(lm['left_eye']) + calc_ear(lm['right_eye'])) / 2.0
+                if e < config.EYE_AR_THRESHOLD:
+                    fd['blinked'] = True
+                    fd['live']    = True
+                    speak("Liveness verified. Scanning your face now.")
+                else:
+                    self._box(frame, ol,ot,or_,ob, YELLOW, "BLINK YOUR EYES", "")
+                    self._status("👁   PLEASE BLINK YOUR EYES ONCE", YELLOW)
+                    speak("Please blink your eyes once.",
+                          key=f"blink_{fid}", cd=5)
+                    continue
+
+            # ── STEP 4: Face Match ────────────────────────
+            if fd['live']:
+                self._set_steps(3)
+                self._status("🔍   SCANNING — PLEASE HOLD STILL", BLUE)
+                if fd['frames'] < config.VALIDATION_FRAMES:
+                    ds = face_recognition.face_distance(self.enc, enc)
+                    if len(ds):
+                        bi = int(np.argmin(ds))
+                        if ds[bi] < config.MATCH_THRESHOLD:
+                            fd['label']  = self.ids[bi]
+                            fd['frames'] += 1
+                        else:
+                            fd['label']  = 'unknown'
+                            fd['frames'] = 0
+                self._box(frame, ol,ot,or_,ob, BLUE,
+                          f"SCANNING {fd['frames']}/{config.VALIDATION_FRAMES}", "")
+
+            # ── MARK ATTENDANCE ───────────────────────────
+            if fd['frames'] >= config.VALIDATION_FRAMES and not fd['marked']:
+                uid = fd['label']
+
+                if uid == 'unknown':
+                    fd['marked'] = True
+                    speak("Face not registered. Please contact admin.")
+                    self._show_ov(RED, '❌', 'NOT REGISTERED', '',
+                                  'Your face is not found in the system.\nPlease contact HR or Admin.')
+                    return
+
+                cd_ok = time.time() - user_cooldowns.get(uid, 0) > (config.COOLDOWN_MINUTES * 60)
+                if not cd_ok:
+                    fd['marked'] = True
+                    name = user_names.get(uid, 'Employee')
+                    speak(f"Please wait 5 minutes {name}. Your attendance is already recorded.")
+                    self._show_ov(ORANGE, '⏳', 'PLEASE WAIT', name,
+                                  'Your attendance is already recorded.\nPlease wait 5 minutes for checkout.')
+                    return
+
+                result = mark_attendance(uid)
+                if result:
+                    user_cooldowns[uid] = time.time()
+                    fd['marked'] = True
+                    self._handle_result(result, uid)
+                else:
+                    speak("Server error. Please try again.")
+                    self._status("❌   SERVER ERROR — PLEASE TRY AGAIN", RED)
+
+        # Remove faces not seen for 3 seconds
+        self.faces = {k: v for k, v in self.faces.items()
+                      if time.time() - v['ts'] < 3}
+
+    # ─────────────────────────────────────────────────────────
+    #  HANDLE API RESULT → CHOOSE OVERLAY
+    # ─────────────────────────────────────────────────────────
+    def _handle_result(self, res, uid):
+        action = res.get('action', '')
+        name   = res.get('employeeName', user_names.get(uid, 'Employee'))
+        msg    = res.get('message', '')
+        cin    = res.get('checkInTime',  '')
+        cout   = res.get('checkOutTime', '')
+
+        if action == 'checkin':
+            speak(f"Welcome {name}. You are checked in. Have a great shift.")
+            detail = f"Check-In Time:  {cin}" if cin else "Have a great shift!"
+            self._show_ov(GREEN, '✅', 'WELCOME!', name, detail)
+
+        elif action == 'checkout':
+            speak(f"Goodbye {name}. You are checked out. See you next time.")
+            detail = f"Check-Out Time:  {cout}" if cout else "See you next time!"
+            self._show_ov(BLUE, '👋', 'GOODBYE!', name, detail)
+
+        elif action == 'completed':
+            speak(f"{name}, your shift for today is already complete. See you tomorrow.")
+            self._show_ov(PURPLE, '🏁', 'SHIFT COMPLETE', name,
+                          f"{name}, your shift for today is already completed.\nSee you tomorrow!")
+
+        elif action == 'none':
+            speak(f"{name}, your shift has not started yet. Please wait.")
+            self._show_ov(ORANGE, '🕐', 'SHIFT NOT STARTED', name,
+                          'Your shift has not started yet.\nPlease wait for your shift to begin.')
+
+        elif action == 'already_marked':
+            speak(f"Please wait 5 minutes {name}. Your attendance is already recorded.")
+            self._show_ov(ORANGE, '⏳', 'ALREADY RECORDED', name,
+                          'Your attendance is already recorded.\nPlease wait 5 minutes before checking out.')
+        else:
+            txt = msg or "Please try again."
+            speak(txt)
+            self._show_ov(ORANGE, '⚠️', 'NOTICE', name, txt)
+
+    # ─────────────────────────────────────────────────────────
+    #  OVERLAY
+    # ─────────────────────────────────────────────────────────
+    def _show_ov(self, bg, icon, title, name, detail):
+        for w in [self.ov, self.ov_icon, self.ov_title,
+                  self.ov_name, self.ov_msg, self.ov_time,
+                  self.pb.master]:
+            w.configure(bg=bg)
+        self.pb.configure(bg=bg)
+        self.ov_icon.config(text=icon)
+        self.ov_title.config(text=title, fg=WHITE)
+        self.ov_name.config(text=name.upper() if name else '', fg=WHITE)
+        self.ov_msg.config(text=detail, fg='#eeeeee')
+        self.ov_time.config(text=datetime.now().strftime("🕐  %I:%M %p"), fg='#cccccc')
+        self.overlay_until = time.time() + OVERLAY_SECS
+        self.cam_canvas.pack_forget()
+        self.ov.pack(fill='both', expand=True)
+
+    def _hide_ov(self):
+        self.ov.pack_forget()
+        self.cam_canvas.pack(fill='both', expand=True)
+        self._status("👤  PLEASE STAND IN FRONT OF THE CAMERA", GREEN)
+        self._set_steps(-1)
+
+    def _draw_pb(self, rem):
+        w = self.pb.winfo_width()
+        if w < 2: return
+        bg = self.ov.cget('bg')
+        self.pb.delete('all')
+        self.pb.configure(bg=bg)
+        filled = max(0, int(w * rem / OVERLAY_SECS))
+        self.pb.create_rectangle(0, 0, w,  14, fill='#00000044', outline='')
+        self.pb.create_rectangle(0, 0, filled, 14, fill='white',   outline='')
+
+    # ─────────────────────────────────────────────────────────
+    #  RENDER CAMERA FRAME
+    # ─────────────────────────────────────────────────────────
+    def _render(self, frame):
+        cw = self.cam_canvas.winfo_width()
+        ch = self.cam_canvas.winfo_height()
+        if cw < 2 or ch < 2:
+            return
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(rgb).resize((cw, ch), Image.LANCZOS)
+
+        # Face guide oval + corner brackets
+        draw = ImageDraw.Draw(img)
+        cx, cy = cw // 2, ch // 2
+        rw, rh = int(cw * 0.20), int(ch * 0.44)
+        ov_col = '#00C853'
+        draw.ellipse([cx-rw, cy-rh, cx+rw, cy+rh], outline=ov_col, width=3)
+        # Corner guides
+        for px, py, sx, sy in [
+            (cx-rw-18, cy-rh-18,  1,  1),
+            (cx+rw+18, cy-rh-18, -1,  1),
+            (cx-rw-18, cy+rh+18,  1, -1),
+            (cx+rw+18, cy+rh+18, -1, -1),
+        ]:
+            draw.line([(px, py), (px+sx*28, py)],        fill=ov_col, width=3)
+            draw.line([(px, py), (px, py+sy*28)],        fill=ov_col, width=3)
+
+        self.photo = ImageTk.PhotoImage(img)
+        self.cam_canvas.create_image(0, 0, anchor='nw', image=self.photo)
+
+    # ─────────────────────────────────────────────────────────
+    #  HELPERS
+    # ─────────────────────────────────────────────────────────
+    def _box(self, frame, l, t, r, b, col, status, name):
+        c = hex2bgr(col)
+        cv2.rectangle(frame, (l,t), (r,b), c, 2)
+        if name:
+            cv2.putText(frame, name,   (l, t-32),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, c, 2)
+        cv2.putText(frame, status, (l, b+30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, c, 2)
+
+    def _status(self, txt, col=GREEN):
+        self.lbl_status.config(text=txt, fg=col)
+
+    def _set_steps(self, active):
+        """Highlight steps 0..active in green, rest grey. -1 = all grey."""
+        for i, (dot, lbl) in enumerate(self.step_labels):
+            if i < active:
+                dot.config(fg=GREEN)
+                lbl.config(fg=GREEN)
+            elif i == active:
+                dot.config(fg=YELLOW)
+                lbl.config(fg=YELLOW)
             else:
-                status = "SPOOF CHECK"
+                dot.config(fg=DGRAY)
+                lbl.config(fg=LGRAY)
 
-            cv2.rectangle(frame, (o_left, o_top), (o_right, o_bottom), color, 2)
-            cv2.putText(frame, user_names.get(face_data["label"], "Scanning..."), (o_left, o_top-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-            cv2.putText(frame, status, (o_left, o_bottom+25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    def shutdown(self):
+        if self.cap:
+            self.cap.release()
+        self.root.destroy()
 
-        if time.time() > next_cleanup:
-            to_delete = [fid for fid, d in tracked_faces.items() if time.time() - d["last_seen"] > 2]
-            for fid in to_delete: del tracked_faces[fid]
-            next_cleanup = time.time() + 30
+# ══════════════════════════════════════════════════════════════
+#  ENTRY POINT
+# ══════════════════════════════════════════════════════════════
+def main():
+    print("╔══════════════════════════════════════════╗")
+    print("║   ZERO-SPOOF BIOMETRIC KIOSK  v3.0      ║")
+    print("╚══════════════════════════════════════════╝")
 
-        cv2.imshow('ULTRA-SECURE KIOSK', frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'): break
+    speak("Biometric attendance system is starting. Please wait.")
 
-    cap.release()
-    cv2.destroyAllWindows()
+    enc, ids = get_employees()
+    if not enc:
+        speak("Cannot connect to server. Please contact admin.")
+        input("❌  No employee data. Press Enter to exit...")
+        return
+
+    speak("System is ready. Please stand in front of the camera.")
+
+    root = tk.Tk()
+    app  = KioskApp(root, enc, ids)
+    root.mainloop()
 
 if __name__ == "__main__":
     main()

@@ -6,170 +6,332 @@ const { reconcileAttendance } = require('./attendanceController');
 // @desc    Generate/Calculate Payroll for a specific month
 // @route   POST /api/payroll/generate
 // @access  Private/Admin
-const generatePayroll = async (req, res) => {
-    const { month, userId } = req.body; // YYYY-MM
+// --- CORE LOGIC SERVICE ---
+const generatePayrollService = async (adminId, month, cycle, customStart, customEnd) => {
+    if (!month && !customStart) throw new Error('Month or Custom Date Range is required');
 
-    if (!month) {
-        return res.status(400).json({ message: 'Month is required (YYYY-MM)' });
+    const query = { role: { $ne: 'Admin' }, adminId: adminId };
+    
+    const employees = await User.find(query);
+    const payrolls = [];
+
+    // 1. Determine Date Range for the Cycle
+    let startDate, endDate;
+
+    if (customStart && customEnd) {
+        startDate = new Date(customStart);
+        endDate = new Date(customEnd);
+    } else {
+        const [yearStr, monthStr] = month.split('-');
+        const reqYear = parseInt(yearStr, 10);
+        const reqMonth = parseInt(monthStr, 10);
+        
+        let daysInMonth = new Date(reqYear, reqMonth, 0).getDate();
+
+        if (cycle === 7 || cycle === '7') {
+            // Cycle 7: 23rd of Prev Month -> 7th of Current Month
+            let prevYear = reqYear;
+            let prevMonth = reqMonth - 1;
+            if (prevMonth === 0) {
+                prevMonth = 12;
+                prevYear -= 1;
+            }
+            startDate = new Date(prevYear, prevMonth - 1, 23);
+            endDate = new Date(reqYear, reqMonth - 1, 7);
+        } else if (cycle === 22 || cycle === '22') {
+            // Cycle 22: 8th of Current Month -> 22nd of Current Month
+            startDate = new Date(reqYear, reqMonth - 1, 8);
+            endDate = new Date(reqYear, reqMonth - 1, 22);
+        } else {
+            // Default Full Month
+            startDate = new Date(reqYear, reqMonth - 1, 1);
+            endDate = new Date(reqYear, reqMonth - 1, daysInMonth);
+            
+            const today = new Date();
+            if (today.getFullYear() === reqYear && (today.getMonth() + 1) === reqMonth) {
+                endDate = new Date(reqYear, reqMonth - 1, today.getDate());
+            } else if (today.getFullYear() < reqYear || (today.getFullYear() === reqYear && (today.getMonth() + 1) < reqMonth)) {
+                endDate = new Date(reqYear, reqMonth - 1, 0); // Future
+            }
+        }
     }
 
-    try {
-        const query = { role: { $ne: 'Admin' }, adminId: req.adminId };
-        if (userId) {
-            query._id = userId;
-        }
-        
-        const employees = await User.find(query);
-        const payrolls = [];
+    // Cap the endDate to today so we don't penalize future days if generated early
+    const currentToday = new Date();
+    currentToday.setHours(0,0,0,0);
+    if (endDate > currentToday) {
+        endDate = new Date(currentToday);
+    }
 
-        for (const user of employees) {
-            // 1. Reconcile attendance first to ensure accuracy
-            await reconcileAttendance(user._id);
+    if (startDate > endDate) {
+        return []; // The cycle hasn't even started yet!
+    }
 
-            // 2. Fetch attendance records for the month
-            const attendanceRecords = await Attendance.find({
-                userId: user._id,
-                date: { $regex: `^${month}` }
-            });
+    // Format dates for DB querying
+    const startStr = `${startDate.getFullYear()}-${(startDate.getMonth()+1).toString().padStart(2,'0')}-${startDate.getDate().toString().padStart(2,'0')}`;
+    const endStr = `${endDate.getFullYear()}-${(endDate.getMonth()+1).toString().padStart(2,'0')}-${endDate.getDate().toString().padStart(2,'0')}`;
+    const totalDaysInCycle = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
 
-            const totalLates = attendanceRecords.filter(r => r.status === 'Late' || r.status === 'Short Hours').length;
-            const presentDays = attendanceRecords.filter(r => r.status === 'Present' || r.status === 'Late' || r.status === 'Short Hours').length;
+    for (const user of employees) {
+        // Reconcile attendance first
+        await reconcileAttendance(user._id);
 
-            // Absence Rule: Skip Off-Days
-            let totalAbsents = 0;
-            let totalLeavesTaken = 0;
-            const userOffDays = user.offDays || [0]; // Default Sunday
-            
-            attendanceRecords.forEach(r => {
-                const dateObj = new Date(r.date);
-                const dayOfWeek = dateObj.getDay();
+        // Fetch attendance records for the specific cycle range
+        const attendanceRecords = await Attendance.find({
+            userId: user._id,
+            date: { $gte: startStr, $lte: endStr }
+        });
 
-                if (r.status === 'Absent') {
-                    // Only count as absent if it's NOT an off-day
-                    if (!userOffDays.includes(dayOfWeek)) {
-                        if (totalLeavesTaken < (user.leaveQuota || 0)) {
-                            totalLeavesTaken += 1; // Used a leave quota
-                        } else {
-                            // Saturday/Monday Absence Rule: Counts as 3 absences each if it's a working day
-                            // (User specifically mentioned Sat/Mon rule before, keeping it for working days)
-                            if (dayOfWeek === 1 || dayOfWeek === 6) { 
-                                totalAbsents += 3;
-                            } else {
-                                totalAbsents += 1;
-                            }
-                        }
-                    }
-                } else if (r.status === 'On Leave') {
-                    totalLeavesTaken += 1;
-                }
-            });
-
-            // 3. Calculate Shift Duration (Expected)
+        // Expected Shift Calculation
+        let expectedShiftMinutes = 480; // Default 8 hours
+        if (user.workingHours && user.workingHours.start && user.workingHours.end) {
             const [startH, startM] = user.workingHours.start.split(':').map(Number);
             const [endH, endM] = user.workingHours.end.split(':').map(Number);
-            const expectedShiftMinutes = (endH * 60 + endM) - (startH * 60 + startM);
-            const standardDays = 30;
+            expectedShiftMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+        }
 
-            // 4. Calculate Overtime & Short Hours (Actual Minutes vs Expected Minutes)
-            let totalOvertimeMinutes = 0;
-            let totalShortMinutes = 0;
-            attendanceRecords.forEach(r => {
-                // Base Shift Calculation
-                let baseMinutes = 0;
-                if (r.checkIn && r.checkOut) {
-                    baseMinutes = r.duration || 0;
-                }
+        const monthlySalary = user.salary || 0;
+        
+        let totalLates = 0;
+        let totalAbsents = 0; 
+        let actualAbsents = 0; 
+        let totalLeavesTaken = 0;
+        let totalOvertimeMinutes = 0;
+        let totalShortMinutes = 0;
+        let absentDeductionAmount = 0;
+        let lateDeductionAmount = 0;
+        let shortHoursPayDeduction = 0;
+        let proRatedBaseSalary = 0;
+        let overtimePay = 0;
+        
+        let presentDays = 0;
+        let offDaysPassed = 0;
 
-                // Approved Overtime Calculation
-                let approvedOTMinutes = 0;
-                if (r.overtimeIn && r.overtimeOut && r.overtimeStatus === 'Approved') {
-                    approvedOTMinutes = Math.floor((new Date(r.overtimeOut) - new Date(r.overtimeIn)) / (1000 * 60));
-                }
+        const userOffDays = user.offDays || [0]; // Default Sunday
+        const userJoinDate = new Date(user.createdAt || new Date());
+        userJoinDate.setHours(0,0,0,0);
+        const dailyBreakdown = [];
 
-                // Logic: OT first covers Short Hours
-                if (baseMinutes < expectedShiftMinutes) {
-                    const shortage = expectedShiftMinutes - baseMinutes;
-                    const compensation = Math.min(shortage, approvedOTMinutes);
-                    
-                    const adjustedBase = baseMinutes + compensation;
-                    const remainingOT = approvedOTMinutes - compensation;
-
-                    if (adjustedBase < expectedShiftMinutes) {
-                        totalShortMinutes += (expectedShiftMinutes - adjustedBase);
-                    }
-                    totalOvertimeMinutes += remainingOT;
-                } else {
-                    // Base is already complete or exceeded
-                    // Any extra time in base duration (staying late before checkout) + specific OT session
-                    const extraInBase = baseMinutes > expectedShiftMinutes ? (baseMinutes - expectedShiftMinutes) : 0;
-                    totalOvertimeMinutes += (extraInBase + approvedOTMinutes);
-                }
-            });
-
-            // 5. Calculate Salary, Deductions & Earnings
-            const monthlySalary = user.salary || 0;
-            const perDaySalary = monthlySalary / standardDays;
+        // Iterate through every valid day in the cycle date range
+        let loopDate = new Date(startDate);
+        
+        while (loopDate <= endDate) {
+            const day = loopDate.getDate();
+            const monthForDay = loopDate.getMonth() + 1;
+            const yearForDay = loopDate.getFullYear();
             
-            // Per Minute Salary
+            const daysInCurrentLoopMonth = new Date(yearForDay, monthForDay, 0).getDate();
+            const perDaySalary = monthlySalary / daysInCurrentLoopMonth;
             const perMinuteSalary = perDaySalary / expectedShiftMinutes;
             
-            // Overtime: Use extraHourlyRate if set (>0), otherwise use perMinuteSalary
-            const overtimeRatePerMinute = (user.extraHourlyRate && user.extraHourlyRate > 0) 
-                ? (user.extraHourlyRate / 60) 
+            const overtimeRatePerMinute = (user.overtimeHourlyRate && user.overtimeHourlyRate > 0)
+                ? (user.overtimeHourlyRate / 60)
                 : perMinuteSalary;
-            const overtimePay = totalOvertimeMinutes * overtimeRatePerMinute;
-            
-            // Short Hours: Use shortTimeHourlyRate if set (>0), otherwise use perMinuteSalary
+                
             const shortTimeDeductionRatePerMinute = (user.shortTimeHourlyRate && user.shortTimeHourlyRate > 0)
                 ? (user.shortTimeHourlyRate / 60)
                 : perMinuteSalary;
-            const shortHoursPayDeduction = totalShortMinutes * shortTimeDeductionRatePerMinute;
 
-            // Deduction Logic (Standard):
-            // 3 lates = 1 half day (0.5)
-            const lateDeductionAmount = Math.floor(totalLates / 3) * 0.5 * perDaySalary;
+            const dayStr = day.toString().padStart(2, '0');
+            const monthStrLoop = monthForDay.toString().padStart(2, '0');
+            const dateString = `${yearForDay}-${monthStrLoop}-${dayStr}`;
+            
+            const dayOfWeek = loopDate.getDay();
+            const isOffDay = userOffDays.includes(dayOfWeek);
 
-            // 1 absent = 1 day salary deduction
-            const absentDeductionAmount = totalAbsents * perDaySalary;
+            const record = attendanceRecords.find(r => r.date === dateString);
 
-            const totalDeduction = lateDeductionAmount + absentDeductionAmount + shortHoursPayDeduction;
-            const netSalary = monthlySalary - totalDeduction + overtimePay;
+            // IMPORTANT: Only award base salary and apply penalties if the user has already joined the company
+            if (loopDate < userJoinDate) {
+                loopDate.setDate(loopDate.getDate() + 1);
+                continue;
+            }
 
-            // 6. Update or Create Payroll Record
-            const payroll = await Payroll.findOneAndUpdate(
-                { userId: user._id, month },
-                {
-                    userId: user._id,
-                    month,
-                    salary: monthlySalary,
-                    totalDays: standardDays,
-                    presentDays,
-                    totalLates,
-                    totalAbsents,
-                    overtime: {
-                        minutes: Math.round(totalOvertimeMinutes),
-                        pay: Math.round(overtimePay)
-                    },
-                    shortHours: {
-                        minutes: Math.round(totalShortMinutes),
-                        pay: Math.round(shortHoursPayDeduction)
-                    },
-                    deductions: {
-                        lateDeduction: Math.round(lateDeductionAmount),
-                        absentDeduction: Math.round(absentDeductionAmount),
-                        totalDeduction: Math.round(totalDeduction)
-                    },
-                    netSalary: Math.round(Math.max(0, netSalary)),
-                    adminId: req.adminId
-                },
-                { upsert: true, new: true }
-            );
+            // Add to base salary for the day (since base assumes 30/actual days)
+            proRatedBaseSalary += perDaySalary;
 
-            payrolls.push(payroll);
+            if (isOffDay) {
+                offDaysPassed++;
+                let workedOnOffDay = false;
+                if (record && record.checkIn && record.checkOut) {
+                    // Double Overtime for working on an off-day
+                    totalOvertimeMinutes += (record.duration || 0) * 2; 
+                    presentDays++;
+                    workedOnOffDay = true;
+                }
+                dailyBreakdown.push({
+                    date: dateString,
+                    status: 'Off Day' + (workedOnOffDay ? ' (Worked)' : ''),
+                    workMinutes: workedOnOffDay ? (record.duration || 0) : 0,
+                    earnedSalary: Math.round(perDaySalary) // Off days are paid
+                });
+                loopDate.setDate(loopDate.getDate() + 1);
+                continue; 
+            }
+
+            if (!record) {
+                // Only penalize missing punches if the date is AFTER their joining date
+                if (loopDate >= userJoinDate) {
+                    totalAbsents += 1;
+                    actualAbsents += 1;
+                    absentDeductionAmount += perDaySalary;
+                    dailyBreakdown.push({
+                        date: dateString,
+                        status: 'Absent (No Punch)',
+                        workMinutes: 0,
+                        earnedSalary: 0
+                    });
+                }
+                loopDate.setDate(loopDate.getDate() + 1);
+                continue;
+            }
+
+            if (record.status === 'Absent') {
+                let isPaidLeave = false;
+                if (totalLeavesTaken < (user.leaveQuota || 0)) {
+                    totalLeavesTaken += 1;
+                    isPaidLeave = true;
+                } else {
+                    totalAbsents += 1;
+                    absentDeductionAmount += perDaySalary;
+                }
+                dailyBreakdown.push({
+                    date: dateString,
+                    status: isPaidLeave ? 'Paid Leave' : 'Absent',
+                    workMinutes: 0,
+                    earnedSalary: isPaidLeave ? Math.round(perDaySalary) : 0
+                });
+                loopDate.setDate(loopDate.getDate() + 1);
+                continue;
+            }
+
+            if (record.status === 'On Leave') {
+                totalLeavesTaken += 1;
+                dailyBreakdown.push({
+                    date: dateString,
+                    status: 'On Leave',
+                    workMinutes: expectedShiftMinutes,
+                    earnedSalary: Math.round(perDaySalary)
+                });
+                loopDate.setDate(loopDate.getDate() + 1);
+                continue;
+            }
+
+            // Working day
+            presentDays++;
+            let shortageDeductionForThisDay = 0;
+            
+            let baseMinutes = 0;
+            if (record.checkIn && record.checkOut) {
+                baseMinutes = record.duration || 0;
+            }
+
+            if (baseMinutes < expectedShiftMinutes) {
+                let shortage = expectedShiftMinutes - baseMinutes;
+                let approvedOTMinutes = 0;
+                if (record.overtimeIn && record.overtimeOut && record.overtimeStatus === 'Approved') {
+                    approvedOTMinutes = Math.floor((new Date(record.overtimeOut) - new Date(record.overtimeIn)) / (1000 * 60));
+                }
+                const compensation = Math.min(shortage, approvedOTMinutes);
+                const remainingOT = approvedOTMinutes - compensation;
+                
+                shortage -= compensation;
+                totalOvertimeMinutes += remainingOT;
+
+                if (shortage > 0) {
+                    totalShortMinutes += shortage;
+                    shortHoursPayDeduction += shortage * shortTimeDeductionRatePerMinute;
+                    shortageDeductionForThisDay = shortage * shortTimeDeductionRatePerMinute;
+                }
+            } else {
+                const extraInBase = baseMinutes - expectedShiftMinutes;
+                let approvedOTMinutes = 0;
+                if (record.overtimeIn && record.overtimeOut && record.overtimeStatus === 'Approved') {
+                    approvedOTMinutes = Math.floor((new Date(record.overtimeOut) - new Date(record.overtimeIn)) / (1000 * 60));
+                }
+                totalOvertimeMinutes += (extraInBase + approvedOTMinutes);
+            }
+
+            if (record.status === 'Late') {
+                totalLates += 1;
+            }
+
+            let displayStatus = record.status || 'Present';
+            if (record.checkIn && !record.checkOut) {
+                displayStatus = 'Missed Checkout';
+            }
+
+            // Record daily breakdown
+            dailyBreakdown.push({
+                date: dateString,
+                status: displayStatus,
+                workMinutes: baseMinutes,
+                earnedSalary: Math.round(Math.max(0, perDaySalary - shortageDeductionForThisDay))
+            });
+            
+            loopDate.setDate(loopDate.getDate() + 1);
         }
 
-        res.json({ message: 'Payroll generated successfully', count: payrolls.length, payrolls });
+        const daysInMonth = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0).getDate();
+        lateDeductionAmount = Math.floor(totalLates / 3) * 0.5 * (monthlySalary / daysInMonth); // Late penalty based on general month
+        overtimePay = totalOvertimeMinutes * (monthlySalary / daysInMonth / expectedShiftMinutes); // Overtime pay based on general month
 
+
+        const totalDeduction = lateDeductionAmount + absentDeductionAmount + shortHoursPayDeduction;
+        const netSalary = proRatedBaseSalary - totalDeduction + overtimePay;
+
+        // 6. Create Payroll Record (History tracking)
+        const payroll = await Payroll.create({
+            userId: user._id,
+            month: cycle ? `${month} (Till ${cycle})` : month,
+            calculationStartDate: startStr,
+            calculationEndDate: endStr,
+            salary: monthlySalary,
+            totalDays: daysInMonth, // Deprecated conceptually but kept for schema
+            daysInMonth: daysInMonth, 
+            payableDays: totalDaysInCycle, // Total days calculated in this loop
+            offDays: offDaysPassed,
+            presentDays,
+            totalLates,
+            totalAbsents,
+            actualAbsents,
+            dailyBreakdown,
+            overtime: {
+                minutes: Math.round(totalOvertimeMinutes),
+                pay: Math.round(overtimePay)
+            },
+            shortHours: {
+                minutes: Math.round(totalShortMinutes),
+                pay: Math.round(shortHoursPayDeduction)
+            },
+            deductions: {
+                lateDeduction: Math.round(lateDeductionAmount),
+                absentDeduction: Math.round(absentDeductionAmount),
+                totalDeduction: Math.round(totalDeduction)
+            },
+            netSalary: Math.round(Math.max(0, netSalary)),
+            adminId: adminId
+        });
+
+        payrolls.push(payroll);
+    }
+
+    return payrolls;
+};
+
+// @desc    Generate/Calculate Payroll for a specific month
+// @route   POST /api/payroll/generate
+// @access  Private/Admin
+const generatePayroll = async (req, res) => {
+    try {
+        const { month, userId, cycle, customStart, customEnd } = req.body;
+        
+        const payrolls = await generatePayrollService(req.adminId, month, cycle, customStart, customEnd);
+        
+        // If a specific userId was requested, filter the result before sending
+        const finalPayrolls = userId ? payrolls.filter(p => p.userId.toString() === userId.toString()) : payrolls;
+
+        res.json({ message: 'Payroll generated successfully', count: finalPayrolls.length, payrolls: finalPayrolls });
     } catch (error) {
         console.error('Error generating payroll:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
@@ -182,10 +344,10 @@ const generatePayroll = async (req, res) => {
 const getPayrolls = async (req, res) => {
     const { month } = req.query; // YYYY-MM
     try {
-        const query = month ? { month, adminId: req.adminId } : { adminId: req.adminId };
+        const query = month ? { month: { $regex: `^${month}` }, adminId: req.adminId } : { adminId: req.adminId };
         const payrolls = await Payroll.find(query)
             .populate('userId', 'name employeeId role department')
-            .sort({ month: -1 });
+            .sort({ createdAt: -1 }); // Sort by newest calculation first
 
         res.json(payrolls);
     } catch (error) {
@@ -205,6 +367,9 @@ const updatePayrollStatus = async (req, res) => {
             return res.status(404).json({ message: 'Payroll record not found' });
         }
 
+        if (status === 'Paid') {
+            payroll.paidAt = new Date();
+        }
         payroll.status = status || payroll.status;
         await payroll.save();
 
@@ -214,8 +379,40 @@ const updatePayrollStatus = async (req, res) => {
     }
 };
 
+// @desc    Delete Payroll Record (Admin)
+// @route   DELETE /api/payroll/:id
+// @access  Private/Admin
+const deletePayroll = async (req, res) => {
+    try {
+        const payroll = await Payroll.findOneAndDelete({ _id: req.params.id, adminId: req.adminId });
+
+        if (!payroll) {
+            return res.status(404).json({ message: 'Payroll record not found' });
+        }
+
+        res.json({ message: 'Payroll record deleted successfully' });
+    } catch (error) {
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
+// @desc    Delete All Payroll Records for Admin (Admin)
+// @route   DELETE /api/payroll/delete-all
+// @access  Private/Admin
+const deleteAllPayrolls = async (req, res) => {
+    try {
+        await Payroll.deleteMany({ adminId: req.adminId });
+        res.json({ message: 'All payroll records deleted successfully' });
+    } catch (error) {
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
 module.exports = {
     generatePayroll,
     getPayrolls,
-    updatePayrollStatus
+    updatePayrollStatus,
+    deletePayroll,
+    deleteAllPayrolls,
+    generatePayrollService
 };

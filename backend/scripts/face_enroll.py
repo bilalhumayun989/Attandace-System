@@ -1,233 +1,369 @@
 # pyrefly: ignore [missing-import]
+# ╔══════════════════════════════════════════════════════════════╗
+# ║        SECURE FACE ENROLLMENT STATION v3.0                  ║
+# ║              Production Ready — Admin Grade                  ║
+# ╚══════════════════════════════════════════════════════════════╝
+
 import cv2
-# pyrefly: ignore [missing-import]
 import face_recognition
 import numpy as np
 import requests
 import time
+import threading
+import queue
+import pyttsx3
 from datetime import datetime
+from PIL import Image, ImageTk, ImageDraw
+import tkinter as tk
+from tkinter import ttk, messagebox
 import config
 from scipy.spatial import distance as dist
-import threading
-import pyttsx3
 
-# --- Vocal Feedback ---
-def speak(text):
-    def _run_speak():
+# ── Colors ────────────────────────────────────────────────────
+BG      = '#0d0d0d'
+HDR     = '#161616'
+GREEN   = '#00C853'
+BLUE    = '#1565C0'
+ORANGE  = '#E65100'
+RED     = '#B71C1C'
+PURPLE  = '#4A148C'
+WHITE   = '#FFFFFF'
+LGRAY   = '#888888'
+DGRAY   = '#2a2a2a'
+
+# ══════════════════════════════════════════════════════════════
+#  VOICE ENGINE
+# ══════════════════════════════════════════════════════════════
+_vq = queue.Queue()
+def _voice_worker():
+    tts = pyttsx3.init()
+    tts.setProperty('rate', 150)
+    while True:
+        txt = _vq.get()
+        if txt is None: break
         try:
-            engine = pyttsx3.init()
-            engine.setProperty('rate', 150)
-            engine.say(text)
-            engine.runAndWait()
-            engine.stop()
-        except Exception as e: print(f"🔊 TTS Error: {e}")
-    threading.Thread(target=_run_speak, daemon=True).start()
+            tts.say(txt)
+            tts.runAndWait()
+        except: pass
+        _vq.task_done()
+threading.Thread(target=_voice_worker, daemon=True).start()
 
-def calculate_ear(eye):
+def speak(text):
+    while not _vq.empty():
+        try: _vq.get_nowait()
+        except: pass
+    _vq.put(text)
+
+# ══════════════════════════════════════════════════════════════
+#  ANTI-SPOOF HELPERS
+# ══════════════════════════════════════════════════════════════
+def calc_ear(eye):
     A = dist.euclidean(eye[1], eye[5])
     B = dist.euclidean(eye[2], eye[4])
     C = dist.euclidean(eye[0], eye[3])
-    ear = (A + B) / (2.0 * C)
-    return ear
+    return (A + B) / (2.0 * C)
 
-def get_face_yaw(landmarks):
-    left_eye = np.mean(landmarks['left_eye'], axis=0)
-    right_eye = np.mean(landmarks['right_eye'], axis=0)
-    nose_tip = landmarks['nose_bridge'][-1]
-    dist_l = dist.euclidean(nose_tip, left_eye)
-    dist_r = dist.euclidean(nose_tip, right_eye)
-    return dist_l / dist_r
+def calc_yaw(lm):
+    le = np.mean(lm['left_eye'], axis=0)
+    re = np.mean(lm['right_eye'], axis=0)
+    nt = lm['nose_bridge'][-1]
+    return dist.euclidean(nt, le) / (dist.euclidean(nt, re) + 1e-6)
 
-def check_texture(frame, top, right, bottom, left):
-    face_img = frame[top:bottom, left:right]
-    if face_img.size == 0: return 0, 0
-    gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
-    variance = cv2.Laplacian(gray, cv2.CV_64F).var()
-    dft = cv2.dft(np.float32(gray), flags=cv2.DFT_COMPLEX_OUTPUT)
-    dft_shift = np.fft.fftshift(dft)
-    magnitude_spectrum = 20 * np.log(cv2.magnitude(dft_shift[:, :, 0], dft_shift[:, :, 1]) + 1)
-    moire_score = np.mean(magnitude_spectrum)
-    return variance, moire_score
+def calc_texture(frame, t, r, b, l):
+    roi = frame[t:b, l:r]
+    if roi.size == 0: return 0, 0
+    g = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    var = cv2.Laplacian(g, cv2.CV_64F).var()
+    dft = cv2.dft(np.float32(g), flags=cv2.DFT_COMPLEX_OUTPUT)
+    ds = np.fft.fftshift(dft)
+    ms = 20 * np.log(cv2.magnitude(ds[:,:,0], ds[:,:,1]) + 1)
+    return var, np.mean(ms)
 
-def login_admin():
-    print("\n--- Admin Login Required ---")
-    email = input("Email: ")
-    password = input("Password: ")
-    try:
-        response = requests.post(f"{config.API_BASE_URL}/users/login", json={
-            "id": email,
-            "password": password
-        })
-        if response.status_code == 200:
-            data = response.json()
-            return data.get('token')
-        else:
-            print(f"❌ Login failed: {response.json().get('message')}")
-    except Exception as e:
-        print(f"❌ Connection error during login: {e}")
-    return None
+def hex2bgr(h):
+    h = h.lstrip('#')
+    return (int(h[4:6],16), int(h[2:4],16), int(h[0:2],16))
 
-def get_unrolled_employees(token):
-    try:
-        # Fetching all users
-        headers = {"Authorization": f"Bearer {token}", "X-Role-Context": "Admin"}
-        response = requests.get(f"{config.API_BASE_URL}/users", headers=headers)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            print(f"❌ Error fetching employees: {response.status_code}")
-    except Exception as e:
-        print(f"❌ Error fetching employees: {e}")
-    return []
-
-def enroll_employee(token, user_id, descriptors):
-    try:
-        url = f"{config.API_BASE_URL}/attendance/enroll-face"
-        headers = {"Authorization": f"Bearer {token}", "X-Role-Context": "Admin"}
-        payload = {
-            "userId": user_id,
-            "descriptors": [d.tolist() for d in descriptors]
+# ══════════════════════════════════════════════════════════════
+#  ENROLLMENT APPLICATION
+# ══════════════════════════════════════════════════════════════
+class EnrollApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Secure Face Enrollment v3.0")
+        self.root.configure(bg=BG)
+        self.root.attributes('-fullscreen', True)
+        
+        self.token = None
+        self.target_user = None
+        self.captured_descriptors = []
+        self.cap = None
+        self.photo = None
+        
+        # Liveness State
+        self.liveness = {
+            "textured": False, "turned": False, "blinked": False,
+            "tex_h": [], "yaw_h": []
         }
-        response = requests.post(url, json=payload, headers=headers)
-        return response.json()
-    except Exception as e:
-        print(f"❌ API Error: {e}")
-        return None
-
-def connect_camera():
-    source = 0 if config.CAMERA_SOURCE == 0 else config.RTSP_URL
-    cap = cv2.VideoCapture(source)
-    return cap
-
-def main():
-    print("\n--- [IP CAMERA] Face Enrollment Tool ---")
-    
-    # 0. Login
-    token = login_admin()
-    if not token:
-        return
-
-    # 1. Select Employee
-    employees = get_unrolled_employees(token)
-    if not employees:
-        print("No employees found or unauthorized. Make sure API is running.")
-        return
-
-    print("\nAvailable Employees:")
-    for i, emp in enumerate(employees):
-        status = "✅ Enrolled" if emp.get('faceEnrolled') else "❌ Not Enrolled"
-        print(f"{i+1}. {emp['name']} ({emp['employeeId']}) - {status}")
-
-    try:
-        choice = int(input("\nEnter the number of the employee to enroll: ")) - 1
-        if choice < 0 or choice >= len(employees):
-            print("Invalid selection.")
-            return
-        target_user = employees[choice]
-    except ValueError:
-        print("Invalid input.")
-        return
-
-    print(f"\nInitializing IP Camera for: {target_user['name']}...")
-    cap = connect_camera()
-    if not cap.isOpened():
-        print("Could not open camera stream.")
-        return
-
-    print("Camera connected. Instructions:")
-    print("1. Look directly into the camera.")
-    print("2. Movement/Blink is required for liveness verification.")
-    
-    speak(f"Starting enrollment for {target_user['name']}. Look at the camera.")
-
-    captured_descriptors = []
-    liveness = {"textured": False, "turned": False, "blinked": False, "texture_history": [], "yaw_history": []}
-    
-    while len(captured_descriptors) < 5:
-        ret, frame = cap.read()
-        if not ret: break
-
-        small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
-        rgb_small = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
         
-        face_locations = face_recognition.face_locations(rgb_small)
-        face_landmarks_list = face_recognition.face_landmarks(rgb_small, face_locations)
+        self._show_login()
+
+    # ─────────────────────────────────────────────────────────
+    #  SCREEN 1: LOGIN
+    # ─────────────────────────────────────────────────────────
+    def _show_login(self):
+        for w in self.root.winfo_children(): w.destroy()
         
-        display_frame = frame.copy()
+        frame = tk.Frame(self.root, bg=HDR, padx=40, pady=40, highlightbackground=DGRAY, highlightthickness=1)
+        frame.place(relx=0.5, rely=0.5, anchor='center')
         
-        if len(face_locations) == 1:
-            top, right, bottom, left = [v*4 for v in face_locations[0]]
-            landmarks = face_landmarks_list[0]
-            cv2.rectangle(display_frame, (left, top), (right, bottom), (0, 255, 0), 2)
-            
-            # --- 1. Texture Check ---
-            if not liveness["textured"]:
-                var, moire = check_texture(frame, top, right, bottom, left)
-                liveness["texture_history"].append(var)
-                if len(liveness["texture_history"]) > 10: liveness["texture_history"].pop(0)
-                if np.mean(liveness["texture_history"]) > config.TEXTURE_THRESHOLD and moire < config.MOIRE_THRESHOLD:
-                    liveness["textured"] = True
-                    speak("Surface verified.")
-                else:
-                    cv2.putText(display_frame, "VERIFYING SURFACE...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        tk.Label(frame, text="🔒", font=('Segoe UI Emoji', 40), bg=HDR, fg=BLUE).pack(pady=(0,10))
+        tk.Label(frame, text="ADMIN LOGIN", font=('Arial', 20, 'bold'), bg=HDR, fg=WHITE).pack(pady=(0,20))
+        
+        tk.Label(frame, text="Email / Username", font=('Arial', 10), bg=HDR, fg=LGRAY).pack(anchor='w')
+        self.ent_user = tk.Entry(frame, font=('Arial', 14), bg=BG, fg=WHITE, borderwidth=0, insertbackground=WHITE)
+        self.ent_user.pack(fill='x', pady=(5,15), ipady=8)
+        tk.Frame(frame, height=1, bg=DGRAY).pack(fill='x', pady=(0,15))
+        
+        tk.Label(frame, text="Password", font=('Arial', 10), bg=HDR, fg=LGRAY).pack(anchor='w')
+        self.ent_pass = tk.Entry(frame, font=('Arial', 14), bg=BG, fg=WHITE, borderwidth=0, show="●", insertbackground=WHITE)
+        self.ent_pass.pack(fill='x', pady=(5,15), ipady=8)
+        tk.Frame(frame, height=1, bg=DGRAY).pack(fill='x', pady=(0,25))
+        
+        btn = tk.Button(frame, text="AUTHENTICATE", font=('Arial', 12, 'bold'), 
+                        bg=BLUE, fg=WHITE, activebackground='#1a237e', activeforeground=WHITE,
+                        borderwidth=0, cursor='hand2', command=self._handle_login)
+        btn.pack(fill='x', ipady=12)
+        
+        self.lbl_error = tk.Label(frame, text="", font=('Arial', 10), bg=HDR, fg=RED)
+        self.lbl_error.pack(pady=(15,0))
 
-            # --- 2. Pose Check ---
-            elif not liveness["turned"]:
-                yaw = get_face_yaw(landmarks)
-                liveness["yaw_history"].append(yaw)
-                if len(liveness["yaw_history"]) > 15: liveness["yaw_history"].pop(0)
-                if (max(liveness["yaw_history"]) - min(liveness["yaw_history"])) > config.POSE_YAW_THRESHOLD:
-                    liveness["turned"] = True
-                    speak("Motion verified. Now blink.")
-                else:
-                    cv2.putText(display_frame, "TURN HEAD SLIGHTLY", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
-
-            # --- 3. Blink Check ---
-            elif not liveness["blinked"]:
-                ear = (calculate_ear(landmarks['left_eye']) + calculate_ear(landmarks['right_eye'])) / 2.0
-                if ear < config.EYE_AR_THRESHOLD:
-                    liveness["blinked"] = True
-                    speak("Liveness confirmed. Capturing angles.")
-                else:
-                    cv2.putText(display_frame, "BLINK YOUR EYES", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
-
-            # --- 4. Capture ---
+    def _handle_login(self):
+        u, p = self.ent_user.get(), self.ent_pass.get()
+        try:
+            r = requests.post(f"{config.API_BASE_URL}/users/login", json={"id": u, "password": p}, timeout=10)
+            if r.status_code == 200:
+                self.token = r.json().get('token')
+                self._show_selection()
             else:
-                cv2.putText(display_frame, f"SAMPLES: {len(captured_descriptors)}/5", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                cv2.putText(display_frame, "LOOK AT DIFFERENT ANGLES", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                self.lbl_error.config(text=r.json().get('message', 'Login Failed'))
+        except Exception as e:
+            self.lbl_error.config(text="Connection Error")
+
+    # ─────────────────────────────────────────────────────────
+    #  SCREEN 2: SELECTION
+    # ─────────────────────────────────────────────────────────
+    def _show_selection(self):
+        for w in self.root.winfo_children(): w.destroy()
+        
+        # Header
+        hdr = tk.Frame(self.root, bg=HDR, height=80)
+        hdr.pack(fill='x')
+        tk.Label(hdr, text="👤 EMPLOYEE ENROLLMENT SELECTION", font=('Arial', 18, 'bold'), bg=HDR, fg=WHITE).pack(side='left', padx=30, pady=20)
+        
+        # Container
+        container = tk.Frame(self.root, bg=BG)
+        container.pack(fill='both', expand=True, padx=100, pady=50)
+        
+        # Listbox
+        list_frame = tk.Frame(container, bg=DGRAY)
+        list_frame.pack(fill='both', expand=True)
+        
+        style = ttk.Style()
+        style.theme_use('default')
+        style.configure("Treeview", background=DGRAY, foreground=WHITE, fieldbackground=DGRAY, rowheight=40, font=('Arial', 11))
+        style.map("Treeview", background=[('selected', BLUE)])
+        
+        self.tree = ttk.Treeview(list_frame, columns=('ID', 'Name', 'Status'), show='headings')
+        self.tree.heading('ID', text='EMPLOYEE ID')
+        self.tree.heading('Name', text='NAME')
+        self.tree.heading('Status', text='STATUS')
+        self.tree.pack(side='left', fill='both', expand=True)
+        
+        sb = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
+        sb.pack(side='right', fill='y')
+        self.tree.configure(yscrollcommand=sb.set)
+        
+        # Actions
+        actions = tk.Frame(container, bg=BG, pady=30)
+        actions.pack(fill='x')
+        
+        tk.Button(actions, text="START ENROLLMENT", font=('Arial', 12, 'bold'), bg=GREEN, fg=WHITE, padx=30, py=10, borderwidth=0, command=self._start_capture).pack(side='right')
+        tk.Button(actions, text="REFRESH LIST", font=('Arial', 10), bg=DGRAY, fg=WHITE, padx=20, borderwidth=0, command=self._load_employees).pack(side='left')
+        
+        self._load_employees()
+
+    def _load_employees(self):
+        for i in self.tree.get_children(): self.tree.delete(i)
+        try:
+            h = {"Authorization": f"Bearer {self.token}", "X-Role-Context": "Admin"}
+            r = requests.get(f"{config.API_BASE_URL}/users", headers=h, timeout=10)
+            if r.status_code == 200:
+                for emp in r.json():
+                    status = "✅ ENROLLED" if emp.get('faceEnrolled') else "❌ NOT ENROLLED"
+                    self.tree.insert('', 'end', iid=emp['_id'], values=(emp['employeeId'], emp['name'], status))
+        except: messagebox.showerror("Error", "Could not fetch employees")
+
+    def _start_capture(self):
+        sel = self.tree.selection()
+        if not sel: return
+        uid = sel[0]
+        item = self.tree.item(uid)
+        self.target_user = {"_id": uid, "name": item['values'][1]}
+        
+        self._show_camera_screen()
+
+    # ─────────────────────────────────────────────────────────
+    #  SCREEN 3: CAMERA / CAPTURE
+    # ─────────────────────────────────────────────────────────
+    def _show_camera_screen(self):
+        for w in self.root.winfo_children(): w.destroy()
+        
+        self.cam_canvas = tk.Canvas(self.root, bg='black', highlightthickness=0)
+        self.cam_canvas.pack(fill='both', expand=True)
+        
+        # Overlay Info
+        self.info_overlay = tk.Frame(self.root, bg='#00000099', padx=20, pady=20)
+        self.info_overlay.place(relx=0.05, rely=0.05)
+        
+        tk.Label(self.info_overlay, text=f"ENROLLING: {self.target_user['name'].upper()}", font=('Arial', 16, 'bold'), bg='#00000000', fg=WHITE).pack(anchor='w')
+        self.lbl_step = tk.Label(self.info_overlay, text="Step 1: Surface Verification", font=('Arial', 12), bg='#00000000', fg=ORANGE)
+        self.lbl_step.pack(anchor='w', pady=(5,0))
+        
+        # Progress
+        self.prog_frame = tk.Frame(self.root, bg='#00000099', padx=20, pady=10)
+        self.prog_frame.place(relx=0.5, rely=0.9, anchor='center')
+        self.sample_dots = []
+        for i in range(5):
+            d = tk.Label(self.prog_frame, text="○", font=('Arial', 24), bg='#00000000', fg=LGRAY)
+            d.pack(side='left', padx=10)
+            self.sample_dots.append(d)
+            
+        self._open_camera()
+        speak(f"Starting enrollment for {self.target_user['name']}. Please look directly at the camera.")
+        self._loop()
+
+    def _open_camera(self):
+        src = 0 if config.CAMERA_SOURCE == 0 else config.RTSP_URL
+        self.cap = cv2.VideoCapture(src)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    def _loop(self):
+        if not self.cap or not self.cap.isOpened(): return
+        
+        ret, frame = self.cap.read()
+        if not ret: return
+        
+        # Face detection
+        small = cv2.resize(frame, (0,0), fx=0.25, fy=0.25)
+        rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+        locs = face_recognition.face_locations(rgb, model="hog")
+        lms_list = face_recognition.face_landmarks(rgb, locs)
+        
+        if locs:
+            t,r,b,l = [v*4 for v in locs[0]]
+            lm = lms_list[0]
+            
+            # 1. Texture
+            if not self.liveness["textured"]:
+                self.lbl_step.config(text="Step 1: Surface Verification", fg=ORANGE)
+                v, m = calc_texture(frame, t,r,b,l)
+                self.liveness["tex_h"].append(v)
+                if len(self.liveness["tex_h"]) > 10: self.liveness["tex_h"].pop(0)
+                if np.mean(self.liveness["tex_h"]) > config.TEXTURE_THRESHOLD and m < config.MOIRE_THRESHOLD:
+                    self.liveness["textured"] = True
+                    speak("Surface verified. Now slowly turn your head.")
+                self._box(frame, l,t,r,b, ORANGE, "VERIFYING SURFACE...")
+            
+            # 2. Yaw
+            elif not self.liveness["turned"]:
+                self.lbl_step.config(text="Step 2: Motion Verification", fg=YELLOW)
+                y = calc_yaw(lm)
+                self.liveness["yaw_h"].append(y)
+                if len(self.liveness["yaw_h"]) > 15: self.liveness["yaw_h"].pop(0)
+                if (max(self.liveness["yaw_h"]) - min(self.liveness["yaw_h"])) > config.POSE_YAW_THRESHOLD:
+                    self.liveness["turned"] = True
+                    speak("Motion verified. Now blink once.")
+                self._box(frame, l,t,r,b, YELLOW, "TURN HEAD SLIGHTLY")
                 
-                rgb_full = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                encoding = face_recognition.face_encodings(rgb_full, [ (top, right, bottom, left) ])[0]
+            # 3. Blink
+            elif not self.liveness["blinked"]:
+                self.lbl_step.config(text="Step 3: Liveness Check", fg=PURPLE)
+                e = (calc_ear(lm['left_eye']) + calc_ear(lm['right_eye'])) / 2.0
+                if e < config.EYE_AR_THRESHOLD:
+                    self.liveness["blinked"] = True
+                    speak("Liveness verified. Capturing face samples.")
+                self._box(frame, l,t,r,b, PURPLE, "BLINK YOUR EYES")
                 
-                is_new = True
-                for existing in captured_descriptors:
-                    if np.linalg.norm(existing - encoding) < 0.38:
-                        is_new = False; break
+            # 4. Capture 5 samples
+            else:
+                self.lbl_step.config(text="Step 4: Capturing Angles", fg=GREEN)
+                self._box(frame, l,t,r,b, GREEN, f"SAMPLES: {len(self.captured_descriptors)}/5")
                 
-                if is_new:
-                    captured_descriptors.append(encoding)
-                    speak(f"Angle {len(captured_descriptors)} captured.")
-                    time.sleep(0.8)
+                if len(self.captured_descriptors) < 5:
+                    rgb_full = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    enc = face_recognition.face_encodings(rgb_full, [(t,r,b,l)])[0]
+                    
+                    is_new = True
+                    for ex in self.captured_descriptors:
+                        if np.linalg.norm(ex - enc) < 0.38: is_new = False; break
+                        
+                    if is_new:
+                        self.captured_descriptors.append(enc)
+                        idx = len(self.captured_descriptors) - 1
+                        self.sample_dots[idx].config(text="●", fg=GREEN)
+                        speak(f"Sample {len(self.captured_descriptors)} captured.")
+                        time.sleep(0.5)
+                else:
+                    self._finalize()
+                    return
+        
+        self._render(frame)
+        self.root.after(30, self._loop)
 
-        else:
-            msg = "Position your face" if not face_locations else "Multiple faces!"
-            cv2.putText(display_frame, msg, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+    def _finalize(self):
+        self.cap.release()
+        speak("All samples captured. Uploading to server.")
+        
+        try:
+            h = {"Authorization": f"Bearer {self.token}", "X-Role-Context": "Admin"}
+            payload = {
+                "userId": self.target_user['_id'],
+                "descriptors": [d.tolist() for d in self.captured_descriptors]
+            }
+            r = requests.post(f"{config.API_BASE_URL}/attendance/enroll-face", json=payload, headers=h, timeout=15)
+            if r.status_code == 200:
+                messagebox.showinfo("Success", f"Successfully enrolled {self.target_user['name']}")
+                self._show_selection()
+            else:
+                messagebox.showerror("Failed", r.json().get('message', 'Upload Error'))
+                self._show_selection()
+        except:
+            messagebox.showerror("Error", "Server Connection Failed")
+            self._show_selection()
 
-        cv2.imshow("Secure Face Enrollment", display_frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'): break
+    # ─────────────────────────────────────────────────────────
+    #  HELPERS
+    # ─────────────────────────────────────────────────────────
+    def _render(self, frame):
+        cw, ch = self.cam_canvas.winfo_width(), self.cam_canvas.winfo_height()
+        if cw < 2: return
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(rgb).resize((cw, ch), Image.LANCZOS)
+        
+        draw = ImageDraw.Draw(img)
+        cx, cy = cw // 2, ch // 2
+        rw, rh = int(cw * 0.18), int(ch * 0.40)
+        draw.ellipse([cx-rw, cy-rh, cx+rw, cy+rh], outline=GREEN, width=2)
+        
+        self.photo = ImageTk.PhotoImage(img)
+        self.cam_canvas.create_image(0,0, anchor='nw', image=self.photo)
 
-    cap.release()
-    cv2.destroyAllWindows()
-
-    if len(captured_descriptors) == 5:
-        print("\nUploading face data to server...")
-        result = enroll_employee(token, target_user['_id'], captured_descriptors)
-        if result and result.get('success'):
-            print(f"✅ SUCCESSFULLY ENROLLED: {target_user['name']}")
-        else:
-            print(f"❌ ENROLLMENT FAILED: {result.get('message', 'Unknown error')}")
-    else:
-        print("\nEnrollment cancelled or incomplete.")
+    def _box(self, frame, l, t, r, b, col, txt):
+        c = hex2bgr(col)
+        cv2.rectangle(frame, (l,t), (r,b), c, 2)
+        cv2.putText(frame, txt, (l, b+30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, c, 2)
 
 if __name__ == "__main__":
-    main()
+    root = tk.Tk()
+    app = EnrollApp(root)
+    root.mainloop()

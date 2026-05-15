@@ -162,6 +162,87 @@ const sendDailyReport = async () => {
     }
 };
 
+const autoGenerateAndSendPayroll = async (cycle) => {
+    try {
+        console.log(`[Cron] Starting auto payroll generation for cycle Till ${cycle}th...`);
+        const { generatePayrollService } = require('../controllers/payrollController');
+        
+        const date = new Date();
+        const monthStr = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+
+        const admins = await User.find({ role: 'Admin' });
+        if (admins.length === 0) return;
+
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS
+            }
+        });
+
+        for (const admin of admins) {
+            // 1. Generate Payroll Data via Service
+            const payrolls = await generatePayrollService(admin._id, monthStr, cycle);
+            
+            if (payrolls.length === 0) continue; // Skip if no employees
+            
+            // 2. Build Excel Report
+            const workbook = new ExcelJS.Workbook();
+            const worksheet = workbook.addWorksheet(`Payroll_Cycle_${cycle}`);
+
+            worksheet.columns = [
+                { header: 'Employee Name', key: 'name', width: 25 },
+                { header: 'Department', key: 'dept', width: 20 },
+                { header: 'Base Salary', key: 'base', width: 15 },
+                { header: 'Payable Days', key: 'days', width: 15 },
+                { header: 'Absents', key: 'absents', width: 10 },
+                { header: 'Lates', key: 'lates', width: 10 },
+                { header: 'Overtime (hrs)', key: 'ot', width: 15 },
+                { header: 'Total Deductions', key: 'deductions', width: 18 },
+                { header: 'Net Salary', key: 'net', width: 15 },
+            ];
+
+            payrolls.forEach(p => {
+                worksheet.addRow({
+                    name: p.userId?.name || 'Unknown',
+                    dept: p.userId?.department || '-',
+                    base: `Rs ${p.salary}`,
+                    days: p.payableDays,
+                    absents: p.totalAbsents,
+                    lates: p.totalLates,
+                    ot: p.overtime ? `${Math.floor(p.overtime.minutes / 60)}h ${p.overtime.minutes % 60}m` : '0h 0m',
+                    deductions: `Rs ${p.deductions?.totalDeduction || 0}`,
+                    net: `Rs ${p.netSalary}`
+                });
+            });
+
+            worksheet.getRow(1).font = { bold: true };
+            worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
+            const buffer = await workbook.xlsx.writeBuffer();
+
+            // 3. Email Admin
+            if (!admin.email) continue;
+            
+            await transporter.sendMail({
+                from: `"HRMS Payroll Auto-Generator" <${process.env.EMAIL_USER}>`,
+                to: admin.email,
+                subject: `Auto Payroll Report - Cycle Till ${cycle}th (${monthStr})`,
+                text: `Hello ${admin.name},\n\nThe automated payroll for the cycle till the ${cycle}th of ${monthStr} has been generated successfully. Please find the detailed Excel report attached.\n\nRegards,\nHRMS Automation`,
+                attachments: [
+                    {
+                        filename: `Payroll_Cycle_${cycle}_${monthStr}.xlsx`,
+                        content: buffer
+                    }
+                ]
+            });
+            console.log(`[Cron] Auto payroll emailed to admin: ${admin.email}`);
+        }
+    } catch (error) {
+        console.error('[Cron Error] Failed to generate/send auto payroll:', error);
+    }
+};
+
 // Schedule to run every 5 minutes for auto-checkout
 cron.schedule('*/5 * * * *', () => {
     runAutoCheckOut();
@@ -178,4 +259,20 @@ cron.schedule('5 0 * * *', () => {
     timezone: "Asia/Karachi"
 });
 
-module.exports = { sendDailyReport, runAutoCheckOut };
+// Auto-Payroll: Run on the 7th of every month at 2:00 AM PKT
+cron.schedule('0 2 7 * *', () => {
+    autoGenerateAndSendPayroll(7);
+}, {
+    scheduled: true,
+    timezone: "Asia/Karachi"
+});
+
+// Auto-Payroll: Run on the 22nd of every month at 2:00 AM PKT
+cron.schedule('0 2 22 * *', () => {
+    autoGenerateAndSendPayroll(22);
+}, {
+    scheduled: true,
+    timezone: "Asia/Karachi"
+});
+
+module.exports = { sendDailyReport, runAutoCheckOut, autoGenerateAndSendPayroll };

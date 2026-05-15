@@ -11,6 +11,12 @@ const payrollSchema = new mongoose.Schema(
             type: String, // YYYY-MM
             required: true,
         },
+        calculationStartDate: {
+            type: String, // YYYY-MM-DD
+        },
+        calculationEndDate: {
+            type: String, // YYYY-MM-DD
+        },
         salary: {
             type: Number,
             required: true,
@@ -18,7 +24,19 @@ const payrollSchema = new mongoose.Schema(
         },
         totalDays: {
             type: Number,
+            default: 30, // Keeping for backward compatibility
+        },
+        daysInMonth: {
+            type: Number,
             default: 30,
+        },
+        payableDays: {
+            type: Number, // The calculationEndDay (e.g. 25 if generated on 25th)
+            default: 0,
+        },
+        offDays: {
+            type: Number, // Number of off-days passed
+            default: 0,
         },
         workingDays: {
             type: Number,
@@ -33,7 +51,11 @@ const payrollSchema = new mongoose.Schema(
             default: 0,
         },
         totalAbsents: {
-            type: Number, // Only 'Absent' status
+            type: Number, // The penalized count (e.g. 3 for Mon/Sat)
+            default: 0,
+        },
+        actualAbsents: {
+            type: Number, // The raw count of absent days
             default: 0,
         },
         totalLeaves: {
@@ -53,6 +75,14 @@ const payrollSchema = new mongoose.Schema(
             absentDeduction: { type: Number, default: 0 },
             totalDeduction: { type: Number, default: 0 },
         },
+        dailyBreakdown: [
+            {
+                date: String,
+                status: String,
+                workMinutes: Number,
+                earnedSalary: Number
+            }
+        ],
 
 
         netSalary: {
@@ -65,6 +95,9 @@ const payrollSchema = new mongoose.Schema(
             enum: ['Pending', 'Paid'],
             default: 'Pending',
         },
+        paidAt: {
+            type: Date,
+        },
         adminId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'User',
@@ -76,9 +109,7 @@ const payrollSchema = new mongoose.Schema(
     }
 );
 
-// Prevent duplicate payrolls for the same user in the same month
-payrollSchema.index({ userId: 1, month: 1 }, { unique: true });
-
+// We allow multiple payrolls for history tracking, so NO unique index on month + userId.
 const Payroll = mongoose.model('Payroll', payrollSchema);
 
 module.exports = Payroll;
