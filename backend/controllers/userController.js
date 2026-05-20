@@ -275,7 +275,7 @@ const resendVerification = async (req, res) => {
         await user.save();
 
         const baseUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'http://localhost:5173';
-        const verificationUrl = `${baseUrl}/attendace/verify-email/${verificationToken}`;
+        const verificationUrl = `${baseUrl}/attendance/verify-email/${verificationToken}`;
 
         const mailOptions = {
             from: `"Brosh-Tech HRM" <${process.env.EMAIL_USER}>`,
