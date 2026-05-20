@@ -187,7 +187,7 @@ class EnrollApp:
         actions = tk.Frame(container, bg=BG, pady=30)
         actions.pack(fill='x')
         
-        tk.Button(actions, text="START ENROLLMENT", font=('Arial', 12, 'bold'), bg=GREEN, fg=WHITE, padx=30, py=10, borderwidth=0, command=self._start_capture).pack(side='right')
+        tk.Button(actions, text="START ENROLLMENT", font=('Arial', 12, 'bold'), bg=GREEN, fg=WHITE, padx=30, pady=10, borderwidth=0, command=self._start_capture).pack(side='right')
         tk.Button(actions, text="REFRESH LIST", font=('Arial', 10), bg=DGRAY, fg=WHITE, padx=20, borderwidth=0, command=self._load_employees).pack(side='left')
         
         self._load_employees()
@@ -222,19 +222,19 @@ class EnrollApp:
         self.cam_canvas.pack(fill='both', expand=True)
         
         # Overlay Info
-        self.info_overlay = tk.Frame(self.root, bg='#00000099', padx=20, pady=20)
+        self.info_overlay = tk.Frame(self.root, bg='#121212', padx=20, pady=20)
         self.info_overlay.place(relx=0.05, rely=0.05)
         
-        tk.Label(self.info_overlay, text=f"ENROLLING: {self.target_user['name'].upper()}", font=('Arial', 16, 'bold'), bg='#00000000', fg=WHITE).pack(anchor='w')
-        self.lbl_step = tk.Label(self.info_overlay, text="Step 1: Surface Verification", font=('Arial', 12), bg='#00000000', fg=ORANGE)
+        tk.Label(self.info_overlay, text=f"ENROLLING: {self.target_user['name'].upper()}", font=('Arial', 16, 'bold'), bg='#121212', fg=WHITE).pack(anchor='w')
+        self.lbl_step = tk.Label(self.info_overlay, text="Step 1: Surface Verification", font=('Arial', 12), bg='#121212', fg=ORANGE)
         self.lbl_step.pack(anchor='w', pady=(5,0))
         
         # Progress
-        self.prog_frame = tk.Frame(self.root, bg='#00000099', padx=20, pady=10)
+        self.prog_frame = tk.Frame(self.root, bg='#121212', padx=20, pady=10)
         self.prog_frame.place(relx=0.5, rely=0.9, anchor='center')
         self.sample_dots = []
         for i in range(5):
-            d = tk.Label(self.prog_frame, text="○", font=('Arial', 24), bg='#00000000', fg=LGRAY)
+            d = tk.Label(self.prog_frame, text="○", font=('Arial', 24), bg='#121212', fg=LGRAY)
             d.pack(side='left', padx=10)
             self.sample_dots.append(d)
             

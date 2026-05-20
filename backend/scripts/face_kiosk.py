@@ -516,7 +516,7 @@ class KioskApp:
         self.pb.delete('all')
         self.pb.configure(bg=bg)
         filled = max(0, int(w * rem / OVERLAY_SECS))
-        self.pb.create_rectangle(0, 0, w,  14, fill='#00000044', outline='')
+        self.pb.create_rectangle(0, 0, w,  14, fill='#2a2a2a', outline='')
         self.pb.create_rectangle(0, 0, filled, 14, fill='white',   outline='')
 
     # ─────────────────────────────────────────────────────────

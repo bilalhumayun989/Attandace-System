@@ -193,7 +193,7 @@ const registerAdmin = async (req, res) => {
             // Send verification email only if valid email is provided
             if (email && typeof email === 'string' && email.trim().includes('@')) {
                 const baseUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'http://localhost:5173';
-                const verificationUrl = `${baseUrl}/verify-email/${verificationToken}`;
+                const verificationUrl = `${baseUrl}/attendace/verify-email/${verificationToken}`;
                 
                 const mailOptions = {
                     from: `"Brosh-Tech HRM" <${process.env.EMAIL_USER}>`,
@@ -275,7 +275,7 @@ const resendVerification = async (req, res) => {
         await user.save();
 
         const baseUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'http://localhost:5173';
-        const verificationUrl = `${baseUrl}/verify-email/${verificationToken}`;
+        const verificationUrl = `${baseUrl}/attendace/verify-email/${verificationToken}`;
 
         const mailOptions = {
             from: `"Brosh-Tech HRM" <${process.env.EMAIL_USER}>`,
