@@ -74,7 +74,7 @@ const reconcileAttendance = async (userId) => {
 
         const newRecords = [];
 
-        const userOffDays = user.offDays || [0];
+        const userOffDays = (user.offDays && user.offDays.length > 0) ? user.offDays : [5]; // Default Friday
         while (current <= yesterday) {
             const dateStr = getPKTDateString(current);
             const dayOfWeek = current.getDay();
@@ -114,21 +114,14 @@ const checkIn = async (req, res) => {
 
         // Check if already checked in today
         let attendance = await Attendance.findOne({ userId, date: dateStr });
+        if (attendance && attendance.checkOut) {
+            return res.status(400).json({ message: 'You have already checked out for today. See you tomorrow!' });
+        }
         if (attendance && attendance.checkIn) {
             return res.status(400).json({ message: 'Already checked in today' });
         }
 
-        const startTime12h = format12h(user.workingHours.start);
-
-        const shiftStartCheck = new Date(formatInTimeZone(pktNow, 'Asia/Karachi', `yyyy-MM-dd'T'${user.workingHours.start}:00XXX`));
-        if (pktNow < shiftStartCheck) {
-            return res.status(400).json({ message: 'shift time not start' });
-        }
-
-        // Late Threshold: 15 minutes grace period
-        const diffInMs = pktNow - shiftStartCheck;
-        const diffInMins = diffInMs / (1000 * 60);
-        const status = diffInMins > 15 ? 'Late' : 'Present';
+        const status = 'Present';
 
         if (!attendance) {
             attendance = new Attendance({
@@ -175,63 +168,25 @@ const checkOut = async (req, res) => {
             return res.status(400).json({ message: 'Already checked out today' });
         }
 
-        // 5-minute cooldown between check-in and check-out
         const checkInTimeObj = new Date(attendance.checkIn);
-        const timeDiffMins = (pktNow - checkInTimeObj) / (1000 * 60);
-        if (timeDiffMins < 5) {
-            return res.status(400).json({ message: 'wait 5 min you are already checked in' });
-        }
 
         // Determine shift duration and effective checkout
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
 
-        let shiftDurationMins = 0;
-        if (user.workingHours) {
-            const [startH, startM] = user.workingHours.start.split(':').map(Number);
-            const [endH, endM] = user.workingHours.end.split(':').map(Number);
-            shiftDurationMins = (endH * 60 + endM) - (startH * 60 + startM);
-            if (shiftDurationMins < 0) shiftDurationMins += 24 * 60;
-        }
-
         const checkInTime = new Date(attendance.checkIn);
         let effectiveCheckOut = pktNow;
-
-        if (user && !user.isOvertimeAllowed && user.workingHours) {
-            const shiftEndTime = new Date(formatInTimeZone(checkInTime, 'Asia/Karachi', `yyyy-MM-dd'T'${user.workingHours.end}:00XXX`));
-            const shiftStartTime = new Date(formatInTimeZone(checkInTime, 'Asia/Karachi', `yyyy-MM-dd'T'${user.workingHours.start}:00XXX`));
-            
-            if (shiftEndTime < shiftStartTime) {
-                shiftEndTime.setDate(shiftEndTime.getDate() + 1);
-            }
-
-            if (pktNow > shiftEndTime) {
-                effectiveCheckOut = shiftEndTime;
-            }
-        }
         
         attendance.checkOut = effectiveCheckOut;
         const durationMs = effectiveCheckOut - checkInTime;
         const totalDurationMins = Math.floor(durationMs / (1000 * 60));
         attendance.duration = totalDurationMins > 0 ? totalDurationMins : 0;
-
-        // Calculate required duration (Shift duration) and update status
-        if (user.workingHours) {
-            if (attendance.status === 'Late' && attendance.duration >= shiftDurationMins) {
-                attendance.status = 'Present';
-            }
-            else if (attendance.duration < shiftDurationMins) {
-                attendance.status = 'Short Hours';
-            }
-        }
+        attendance.status = 'Present'; // Keep it Present based on new simple logic
 
         await attendance.save();
 
-        let message = 'Checked out successfully';
-        if (attendance.status === 'Short Hours') message = 'Checked out early (Short Hours)';
-
         res.json({
-            message,
+            message: 'Checked out successfully',
             attendance
         });
 
@@ -301,7 +256,7 @@ const getAllAttendance = async (req, res) => {
         }
 
         const attendance = await Attendance.find({ adminId: req.adminId })
-            .populate('userId', 'name employeeId role department workingHours')
+            .populate('userId', 'name employeeId role department offDays')
             .sort({ date: -1, createdAt: -1 });
         res.json(attendance);
     } catch (error) {
@@ -341,7 +296,7 @@ const getUserAttendanceHistory = async (req, res) => {
         await reconcileAttendance(userId);
 
         const attendance = await Attendance.find({ userId })
-            .populate('userId', 'name employeeId role department workingHours')
+            .populate('userId', 'name employeeId role department offDays')
             .sort({ date: -1, createdAt: -1 });
 
         res.json(attendance);
@@ -390,13 +345,7 @@ const overtimeIn = async (req, res) => {
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
 
-        // Shift Start Enforcement
-        if (user.workingHours) {
-            const shiftStartTime = new Date(formatInTimeZone(pktNow, 'Asia/Karachi', `yyyy-MM-dd'T'${user.workingHours.start}:00XXX`));
-            if (pktNow < shiftStartTime) {
-                return res.status(400).json({ message: 'shift time not start' });
-            }
-        }
+
 
         let attendance = await Attendance.findOne({ userId, date: dateStr });
         
@@ -499,7 +448,7 @@ const enrollFace = async (req, res) => {
 // @access  Public
 const getFaceDescriptors = async (req, res) => {
     try {
-        const employees = await User.find({ faceEnrolled: true }).select('_id name faceDescriptors isOvertimeAllowed workingHours');
+        const employees = await User.find({ faceEnrolled: true }).select('_id name faceDescriptors');
         res.json({ employees });
     } catch (error) {
         console.error('Error in getFaceDescriptors:', error);
@@ -519,65 +468,15 @@ const faceCheckIn = async (req, res) => {
         const pktNow = getPKTTime(); // Use server time for security
         const dateStr = getPKTDateString(pktNow);
 
-        // Get Shift Boundaries
-        let shiftStartTime = null;
-        let shiftEndTime = null;
-        if (user.workingHours) {
-            shiftStartTime = new Date(formatInTimeZone(pktNow, 'Asia/Karachi', `yyyy-MM-dd'T'${user.workingHours.start}:00XXX`));
-            shiftEndTime = new Date(formatInTimeZone(pktNow, 'Asia/Karachi', `yyyy-MM-dd'T'${user.workingHours.end}:00XXX`));
-            
-            // Handle overnight shift end
-            if (shiftEndTime < shiftStartTime) {
-                shiftEndTime.setDate(shiftEndTime.getDate() + 1);
-            }
-        }
-
         let attendance = await Attendance.findOne({ userId, date: dateStr });
 
-        // --- CASE 1: INITIAL SCAN (Check-In or Overtime Start) ---
+        // --- CASE 1: INITIAL SCAN (Check-In) ---
         if (!attendance) {
-            // Check if shift has already passed
-            if (shiftEndTime && pktNow > shiftEndTime) {
-                if (user.isOvertimeAllowed) {
-                    attendance = new Attendance({
-                        userId,
-                        date: dateStr,
-                        overtimeIn: pktNow,
-                        overtimeStatus: 'Pending',
-                        status: 'Absent',
-                        adminId: user.adminId,
-                        markedByFace: true
-                    });
-                    await attendance.save();
-                    return res.json({
-                        action: 'checkin',
-                        employeeName: user.name,
-                        checkInTime: format12h(formatInTimeZone(pktNow, 'Asia/Karachi', 'HH:mm')),
-                        message: 'Overtime started'
-                    });
-                } else {
-                    return res.json({
-                        action: 'completed',
-                        employeeName: user.name,
-                        message: 'Your shift time has already passed'
-                    });
-                }
-            }
-
-            // Check if shift hasn't started yet (Strict Enforcement)
-            if (shiftStartTime && pktNow < shiftStartTime) {
-                return res.json({
-                    action: 'none',
-                    employeeName: user.name,
-                    message: 'shift time not start'
-                });
-            }
-
             attendance = new Attendance({
                 userId,
                 date: dateStr,
                 checkIn: pktNow,
-                status: (shiftStartTime && pktNow > new Date(shiftStartTime.getTime() + 15 * 60000)) ? 'Late' : 'Present',
+                status: 'Present',
                 adminId: user.adminId,
                 markedByFace: true
             });
@@ -591,49 +490,19 @@ const faceCheckIn = async (req, res) => {
             });
         }
 
-        // --- CASE 2: REPEAT SCAN (Check-Out or Overtime Out) ---
-        if (attendance.checkOut || attendance.overtimeOut) {
+        // --- CASE 2: REPEAT SCAN (Check-Out) ---
+        if (attendance.checkOut) {
             return res.json({
                 action: 'completed',
                 employeeName: user.name,
-                message: 'Shift already completed'
+                message: 'Shift already completed for today. See you tomorrow!'
             });
         }
 
         if (attendance.checkIn && !attendance.checkOut) {
             const checkInTime = new Date(attendance.checkIn);
             
-            // 5-minute cooldown between check-in and check-out
-            const timeDiffMins = (pktNow - checkInTime) / (1000 * 60);
-            if (timeDiffMins < 5) {
-                return res.json({
-                    action: 'already_marked',
-                    employeeName: user.name,
-                    message: 'wait 5 min you are already checked in'
-                });
-            }
-            let shiftDurationMins = 0;
-            if (user.workingHours) {
-                const [startH, startM] = user.workingHours.start.split(':').map(Number);
-                const [endH, endM] = user.workingHours.end.split(':').map(Number);
-                shiftDurationMins = (endH * 60 + endM) - (startH * 60 + startM);
-                if (shiftDurationMins < 0) shiftDurationMins += 24 * 60;
-            }
-
             let effectiveCheckOut = pktNow;
-
-            if (!user.isOvertimeAllowed && user.workingHours) {
-                const shiftEndTime = new Date(formatInTimeZone(checkInTime, 'Asia/Karachi', `yyyy-MM-dd'T'${user.workingHours.end}:00XXX`));
-                const shiftStartTime = new Date(formatInTimeZone(checkInTime, 'Asia/Karachi', `yyyy-MM-dd'T'${user.workingHours.start}:00XXX`));
-                
-                if (shiftEndTime < shiftStartTime) {
-                    shiftEndTime.setDate(shiftEndTime.getDate() + 1);
-                }
-
-                if (pktNow > shiftEndTime) {
-                    effectiveCheckOut = shiftEndTime;
-                }
-            }
 
             attendance.checkOut = effectiveCheckOut;
             attendance.markedByFace = true;
@@ -641,35 +510,16 @@ const faceCheckIn = async (req, res) => {
             const regularDurationMs = Math.max(0, effectiveCheckOut - checkInTime);
             attendance.duration = Math.floor(regularDurationMs / (1000 * 60));
 
-            if (user.isOvertimeAllowed && shiftEndTime && pktNow > shiftEndTime) {
-                attendance.overtimeIn = shiftEndTime > checkInTime ? shiftEndTime : checkInTime;
-                attendance.overtimeOut = pktNow;
-                attendance.overtimeStatus = 'Pending';
-            }
-
             await attendance.save();
 
             return res.json({
                 action: 'checkout',
                 employeeName: user.name,
                 checkOutTime: format12h(formatInTimeZone(effectiveCheckOut, 'Asia/Karachi', 'HH:mm')),
-                message: user.isOvertimeAllowed && pktNow > shiftEndTime ? 'Check-out & Overtime Recorded' : 'Checked Out'
+                message: 'Checked Out'
             });
         }
 
-        if (attendance.overtimeIn && !attendance.overtimeOut) {
-            attendance.overtimeOut = pktNow;
-            attendance.markedByFace = true;
-            attendance.overtimeStatus = 'Pending';
-            await attendance.save();
-
-            return res.json({
-                action: 'checkout',
-                employeeName: user.name,
-                checkOutTime: format12h(formatInTimeZone(pktNow, 'Asia/Karachi', 'HH:mm')),
-                message: 'Overtime Ended'
-            });
-        }
 
         return res.json({ action: 'none', message: 'No action taken' });
 

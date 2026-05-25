@@ -29,10 +29,7 @@ const userSchema = new mongoose.Schema(
             type: String,
             required: true,
         },
-        workingHours: {
-            start: { type: String, required: true, default: '09:00' },
-            end: { type: String, required: true, default: '18:00' },
-        },
+
         status: {
             type: String,
             required: true,
@@ -65,7 +62,7 @@ const userSchema = new mongoose.Schema(
         },
         offDays: {
             type: [Number],
-            default: [0], // Default Sunday off (0 = Sunday, 6 = Saturday)
+            default: [5], // Default Friday off (5 = Friday)
         },
         extraHourlyRate: {
             type: Number,

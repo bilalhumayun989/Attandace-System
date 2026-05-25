@@ -28,12 +28,24 @@ const generateToken = (id) => {
 // @route   POST /api/users/add
 // @access  Public (Should be protected by Admin middleware in production)
 const createEmployee = async (req, res) => {
-    const { employeeId, name, email, password, role, department, workingHours, salary, extraHourlyRate, isOvertimeAllowed } = req.body;
+    const { name, email, password, role, department, salary, offDays } = req.body;
+    console.log('[createEmployee] Received offDays:', offDays);
     try {
-        // 1. Check if user already exists
-        const userExists = await User.findOne({ employeeId });
+        // 1. Generate Employee ID
+        let nextNumber = 1;
+        const lastEmpUser = await User.findOne({ adminId: req.adminId, employeeId: /^EMP-\d+$/ }).sort({ createdAt: -1 });
+        if (lastEmpUser && lastEmpUser.employeeId) {
+            const numPart = lastEmpUser.employeeId.split('-')[1];
+            if (numPart && !isNaN(numPart)) {
+                nextNumber = parseInt(numPart) + 1;
+            }
+        }
+        const employeeId = `EMP-${nextNumber.toString().padStart(3, '0')}`;
+
+        const userExists = await User.findOne({ employeeId, adminId: req.adminId });
         if (userExists) {
-            return res.status(400).json({ message: 'Employee ID already exists' });
+            // Unlikely to happen, but handled just in case
+            return res.status(400).json({ message: 'Employee ID already exists. Please try again.' });
         }
         // 2. Generate a random password if not provided
         const generatedPassword = password || Math.random().toString(36).slice(-8);
@@ -48,12 +60,10 @@ const createEmployee = async (req, res) => {
             password: hashedPassword,
             role,
             department,
-            workingHours,
             isVerified: true,
             salary: salary || 0,
-            extraHourlyRate: extraHourlyRate || 0,
-            isOvertimeAllowed: isOvertimeAllowed || false,
-            adminId: req.adminId, // Scope to the tenant
+            offDays: offDays && Array.isArray(offDays) ? offDays : [5],
+            adminId: req.adminId,
         });
         if (user) {
             // Only attempt to send email if a valid-looking email is provided
@@ -141,8 +151,8 @@ const loginUser = async (req, res) => {
                 email: user.email,
                 role: user.role,
                 department: user.department,
-                workingHours: user.workingHours,
                 salary: user.salary,
+                offDays: user.offDays,
                 token: token
             });
         } else {
@@ -182,7 +192,7 @@ const registerAdmin = async (req, res) => {
             password: hashedPassword,
             role: 'Admin',
             department: companyName || 'Management',
-            workingHours: { start: '09:00', end: '18:00' },
+            offDays: [5],
             adminId: newUserId, // Admin is their own tenant
             isVerified: false,
             verificationToken
@@ -409,8 +419,8 @@ const getMe = async (req, res) => {
                 email: req.user.email,
                 role: req.user.role,
                 department: req.user.department,
-                workingHours: req.user.workingHours,
                 salary: req.user.salary,
+                offDays: req.user.offDays,
                 customRole: req.user.customRole,
                 permissions: req.user.permissions
             });
@@ -472,16 +482,16 @@ const updateUser = async (req, res) => {
                 user.email = req.body.email || user.email;
                 user.role = req.body.role || user.role;
                 user.department = req.body.department || user.department;
-                user.workingHours = req.body.workingHours || user.workingHours;
                 user.salary = req.body.salary !== undefined ? req.body.salary : user.salary;
-                user.extraHourlyRate = req.body.extraHourlyRate !== undefined ? req.body.extraHourlyRate : user.extraHourlyRate;
-                user.isOvertimeAllowed = req.body.isOvertimeAllowed !== undefined ? req.body.isOvertimeAllowed : user.isOvertimeAllowed;
+                user.offDays = req.body.offDays && Array.isArray(req.body.offDays) ? req.body.offDays : user.offDays;
+                console.log('[updateUser] Saving offDays:', user.offDays, '| received:', req.body.offDays);
                 user.customRole = req.body.customRole !== undefined ? req.body.customRole : user.customRole;
             } else if (isSelf) {
                 // Allow self-update for name and email, but prevent sensitive fields
                 user.name = req.body.name || user.name;
                 user.email = req.body.email || user.email;
-                // Explicitly prevent changes to role, department, workingHours, salary for self-update
+                user.offDays = req.body.offDays && Array.isArray(req.body.offDays) ? req.body.offDays : user.offDays;
+                // Explicitly prevent changes to role, salary for self-update (unless owner admin, but usually handled here)
             }
 
             // Profile fields (Available to Admin/Editor and Self)
@@ -523,10 +533,8 @@ const updateUser = async (req, res) => {
                 email: updatedUser.email,
                 role: updatedUser.role,
                 department: updatedUser.department,
-                workingHours: updatedUser.workingHours,
                 salary: updatedUser.salary,
-                extraHourlyRate: updatedUser.extraHourlyRate,
-                isOvertimeAllowed: updatedUser.isOvertimeAllowed,
+                offDays: updatedUser.offDays,
                 status: updatedUser.status
             });
         } else {

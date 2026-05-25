@@ -14,63 +14,8 @@ const getPKTDateString = (date = new Date()) => {
 };
 
 const runAutoCheckOut = async () => {
-    try {
-        const pktNow = getPKTTime();
-
-        // Find all active attendance records without checkout (any date)
-        const activeAttendance = await Attendance.find({
-            checkIn: { $exists: true, $ne: null },
-            checkOut: null
-        }).populate('userId');
-
-        for (const record of activeAttendance) {
-            const user = record.userId;
-            // Skip if user not found, or if overtime is allowed (they might be working late), or if no working hours set
-            if (!user || user.isOvertimeAllowed || !user.workingHours) continue;
-
-            const checkInTime = new Date(record.checkIn);
-            
-            // Calculate shift end time based on the check-in date
-            const shiftEndTime = new Date(formatInTimeZone(checkInTime, 'Asia/Karachi', `yyyy-MM-dd'T'${user.workingHours.end}:00XXX`));
-            
-            // Handle overnight shifts: if shift end is before shift start, it ends on the next day
-            const shiftStartTime = new Date(formatInTimeZone(checkInTime, 'Asia/Karachi', `yyyy-MM-dd'T'${user.workingHours.start}:00XXX`));
-            if (shiftEndTime < shiftStartTime) {
-                shiftEndTime.setDate(shiftEndTime.getDate() + 1);
-            }
-
-            // If current time is past shift end time, perform auto checkout
-            if (pktNow >= shiftEndTime) {
-                console.log(`[Auto-Checkout] Checking out ${user.name} at ${shiftEndTime}`);
-                
-                record.checkOut = shiftEndTime;
-                
-                // Calculate duration in minutes
-                const durationMs = shiftEndTime - checkInTime;
-                const totalDurationMins = Math.floor(durationMs / (1000 * 60));
-                record.duration = totalDurationMins > 0 ? totalDurationMins : 0;
-                
-                record.markedByFace = false; // System automated
-
-                // Calculate required shift duration
-                const [startH, startM] = user.workingHours.start.split(':').map(Number);
-                const [endH, endM] = user.workingHours.end.split(':').map(Number);
-                let requiredDurationMins = (endH * 60 + endM) - (startH * 60 + startM);
-                if (requiredDurationMins < 0) requiredDurationMins += 24 * 60;
-
-                // Update status based on duration
-                if (record.duration < requiredDurationMins) {
-                    record.status = 'Short Hours';
-                } else if (record.status === 'Late' && record.duration >= requiredDurationMins) {
-                    record.status = 'Present';
-                }
-
-                await record.save();
-            }
-        }
-    } catch (error) {
-        console.error('[Cron Error] Auto-checkout failed:', error);
-    }
+    // Auto-checkout disabled as there are no fixed shift boundaries.
+    // Missed checkouts are penalized at payroll generation.
 };
 
 const sendDailyReport = async () => {

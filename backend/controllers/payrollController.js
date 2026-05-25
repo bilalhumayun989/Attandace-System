@@ -82,32 +82,18 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
             date: { $gte: startStr, $lte: endStr }
         });
 
-        // Expected Shift Calculation
-        let expectedShiftMinutes = 480; // Default 8 hours
-        if (user.workingHours && user.workingHours.start && user.workingHours.end) {
-            const [startH, startM] = user.workingHours.start.split(':').map(Number);
-            const [endH, endM] = user.workingHours.end.split(':').map(Number);
-            expectedShiftMinutes = (endH * 60 + endM) - (startH * 60 + startM);
-        }
-
         const monthlySalary = user.salary || 0;
         
-        let totalLates = 0;
         let totalAbsents = 0; 
         let actualAbsents = 0; 
         let totalLeavesTaken = 0;
-        let totalOvertimeMinutes = 0;
-        let totalShortMinutes = 0;
         let absentDeductionAmount = 0;
-        let lateDeductionAmount = 0;
-        let shortHoursPayDeduction = 0;
-        let proRatedBaseSalary = 0;
-        let overtimePay = 0;
+        let totalEarnedSalary = 0;
         
         let presentDays = 0;
         let offDaysPassed = 0;
 
-        const userOffDays = user.offDays || [0]; // Default Sunday
+        const userOffDays = (user.offDays && user.offDays.length > 0) ? user.offDays : [5]; // Default Friday
         const userJoinDate = new Date(user.createdAt || new Date());
         userJoinDate.setHours(0,0,0,0);
         const dailyBreakdown = [];
@@ -122,15 +108,6 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
             
             const daysInCurrentLoopMonth = new Date(yearForDay, monthForDay, 0).getDate();
             const perDaySalary = monthlySalary / daysInCurrentLoopMonth;
-            const perMinuteSalary = perDaySalary / expectedShiftMinutes;
-            
-            const overtimeRatePerMinute = (user.overtimeHourlyRate && user.overtimeHourlyRate > 0)
-                ? (user.overtimeHourlyRate / 60)
-                : perMinuteSalary;
-                
-            const shortTimeDeductionRatePerMinute = (user.shortTimeHourlyRate && user.shortTimeHourlyRate > 0)
-                ? (user.shortTimeHourlyRate / 60)
-                : perMinuteSalary;
 
             const dayStr = day.toString().padStart(2, '0');
             const monthStrLoop = monthForDay.toString().padStart(2, '0');
@@ -141,56 +118,61 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
 
             const record = attendanceRecords.find(r => r.date === dateString);
 
-            // IMPORTANT: Only award base salary and apply penalties if the user has already joined the company
+            // Skip days before user joined
             if (loopDate < userJoinDate) {
                 loopDate.setDate(loopDate.getDate() + 1);
                 continue;
             }
 
-            // Add to base salary for the day (since base assumes 30/actual days)
-            proRatedBaseSalary += perDaySalary;
-
             if (isOffDay) {
                 offDaysPassed++;
-                let workedOnOffDay = false;
+                let dayEarnedSalary = perDaySalary;
+                let dayPayLabel = 'Off Day';
+                let baseMinutes = 0;
+
                 if (record && record.checkIn && record.checkOut) {
-                    // Double Overtime for working on an off-day
-                    totalOvertimeMinutes += (record.duration || 0) * 2; 
+                    baseMinutes = record.duration || 0;
+                    dayEarnedSalary = perDaySalary * 1.5;
+                    dayPayLabel = 'Off Day (Worked — ×1.5)';
                     presentDays++;
-                    workedOnOffDay = true;
+                } else if (record && record.checkIn && !record.checkOut) {
+                    dayEarnedSalary = perDaySalary;
+                    dayPayLabel = 'Off Day (Missed Checkout)';
                 }
+
+                totalEarnedSalary += dayEarnedSalary;
                 dailyBreakdown.push({
                     date: dateString,
-                    status: 'Off Day' + (workedOnOffDay ? ' (Worked)' : ''),
-                    workMinutes: workedOnOffDay ? (record.duration || 0) : 0,
-                    earnedSalary: Math.round(perDaySalary) // Off days are paid
+                    status: dayPayLabel,
+                    workMinutes: baseMinutes,
+                    earnedSalary: Math.round(dayEarnedSalary)
                 });
                 loopDate.setDate(loopDate.getDate() + 1);
                 continue; 
             }
 
+            // No attendance record at all (absent)
             if (!record) {
-                // Only penalize missing punches if the date is AFTER their joining date
-                if (loopDate >= userJoinDate) {
-                    totalAbsents += 1;
-                    actualAbsents += 1;
-                    absentDeductionAmount += perDaySalary;
-                    dailyBreakdown.push({
-                        date: dateString,
-                        status: 'Absent (No Punch)',
-                        workMinutes: 0,
-                        earnedSalary: 0
-                    });
-                }
+                totalAbsents += 1;
+                actualAbsents += 1;
+                absentDeductionAmount += perDaySalary;
+                dailyBreakdown.push({
+                    date: dateString,
+                    status: 'Absent (No Punch)',
+                    workMinutes: 0,
+                    earnedSalary: 0
+                });
                 loopDate.setDate(loopDate.getDate() + 1);
                 continue;
             }
 
+            // Leave-related statuses
             if (record.status === 'Absent') {
                 let isPaidLeave = false;
                 if (totalLeavesTaken < (user.leaveQuota || 0)) {
                     totalLeavesTaken += 1;
                     isPaidLeave = true;
+                    totalEarnedSalary += perDaySalary;
                 } else {
                     totalAbsents += 1;
                     absentDeductionAmount += perDaySalary;
@@ -207,78 +189,67 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
 
             if (record.status === 'On Leave') {
                 totalLeavesTaken += 1;
+                totalEarnedSalary += perDaySalary;
                 dailyBreakdown.push({
                     date: dateString,
                     status: 'On Leave',
-                    workMinutes: expectedShiftMinutes,
+                    workMinutes: 0,
                     earnedSalary: Math.round(perDaySalary)
                 });
                 loopDate.setDate(loopDate.getDate() + 1);
                 continue;
             }
 
-            // Working day
+            // Working day — apply new bracket-based payment logic
             presentDays++;
-            let shortageDeductionForThisDay = 0;
             
             let baseMinutes = 0;
             if (record.checkIn && record.checkOut) {
                 baseMinutes = record.duration || 0;
             }
 
-            if (baseMinutes < expectedShiftMinutes) {
-                let shortage = expectedShiftMinutes - baseMinutes;
-                let approvedOTMinutes = 0;
-                if (record.overtimeIn && record.overtimeOut && record.overtimeStatus === 'Approved') {
-                    approvedOTMinutes = Math.floor((new Date(record.overtimeOut) - new Date(record.overtimeIn)) / (1000 * 60));
-                }
-                const compensation = Math.min(shortage, approvedOTMinutes);
-                const remainingOT = approvedOTMinutes - compensation;
-                
-                shortage -= compensation;
-                totalOvertimeMinutes += remainingOT;
+            let dayEarnedSalary = 0;
+            let dayPayLabel = '';
 
-                if (shortage > 0) {
-                    totalShortMinutes += shortage;
-                    shortHoursPayDeduction += shortage * shortTimeDeductionRatePerMinute;
-                    shortageDeductionForThisDay = shortage * shortTimeDeductionRatePerMinute;
-                }
+            if (!record.checkOut) {
+                // Missed checkout — treat as absent
+                dayEarnedSalary = 0;
+                dayPayLabel = 'Missed Checkout';
+                totalAbsents += 1;
+                absentDeductionAmount += perDaySalary;
+            } else if (baseMinutes > 9 * 60) {
+                // More than 9 hours worked → count as 12 hours → daily salary × 1.5
+                dayEarnedSalary = perDaySalary * 1.5;
+                dayPayLabel = 'Present (12h — ×1.5)';
+            } else if (baseMinutes > 5 * 60) {
+                // More than 5 hours worked → count as full 8 hours → full day salary
+                dayEarnedSalary = perDaySalary;
+                dayPayLabel = 'Present (Full Day)';
+            } else if (baseMinutes > 1 * 60) {
+                // More than 1 hour worked → count as 4 hours → half day salary
+                dayEarnedSalary = perDaySalary * 0.5;
+                dayPayLabel = 'Present (Half Day)';
             } else {
-                const extraInBase = baseMinutes - expectedShiftMinutes;
-                let approvedOTMinutes = 0;
-                if (record.overtimeIn && record.overtimeOut && record.overtimeStatus === 'Approved') {
-                    approvedOTMinutes = Math.floor((new Date(record.overtimeOut) - new Date(record.overtimeIn)) / (1000 * 60));
-                }
-                totalOvertimeMinutes += (extraInBase + approvedOTMinutes);
+                // Less than or equal to 1 hour — no pay (too short)
+                dayEarnedSalary = 0;
+                dayPayLabel = 'Present (No Pay — <1hr)';
+                totalAbsents += 1;
+                absentDeductionAmount += perDaySalary;
             }
 
-            if (record.status === 'Late') {
-                totalLates += 1;
-            }
+            totalEarnedSalary += dayEarnedSalary;
 
-            let displayStatus = record.status || 'Present';
-            if (record.checkIn && !record.checkOut) {
-                displayStatus = 'Missed Checkout';
-            }
-
-            // Record daily breakdown
             dailyBreakdown.push({
                 date: dateString,
-                status: displayStatus,
+                status: dayPayLabel,
                 workMinutes: baseMinutes,
-                earnedSalary: Math.round(Math.max(0, perDaySalary - shortageDeductionForThisDay))
+                earnedSalary: Math.round(dayEarnedSalary)
             });
             
             loopDate.setDate(loopDate.getDate() + 1);
         }
 
-        const daysInMonth = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0).getDate();
-        lateDeductionAmount = Math.floor(totalLates / 3) * 0.5 * (monthlySalary / daysInMonth); // Late penalty based on general month
-        overtimePay = totalOvertimeMinutes * (monthlySalary / daysInMonth / expectedShiftMinutes); // Overtime pay based on general month
-
-
-        const totalDeduction = lateDeductionAmount + absentDeductionAmount + shortHoursPayDeduction;
-        const netSalary = proRatedBaseSalary - totalDeduction + overtimePay;
+        const netSalary = totalEarnedSalary;
 
         // 6. Create Payroll Record (History tracking)
         const payroll = await Payroll.create({
@@ -287,27 +258,19 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
             calculationStartDate: startStr,
             calculationEndDate: endStr,
             salary: monthlySalary,
-            totalDays: daysInMonth, // Deprecated conceptually but kept for schema
-            daysInMonth: daysInMonth, 
-            payableDays: totalDaysInCycle, // Total days calculated in this loop
+            payableDays: totalDaysInCycle,
             offDays: offDaysPassed,
             presentDays,
-            totalLates,
+            totalLates: 0,
             totalAbsents,
             actualAbsents,
             dailyBreakdown,
-            overtime: {
-                minutes: Math.round(totalOvertimeMinutes),
-                pay: Math.round(overtimePay)
-            },
-            shortHours: {
-                minutes: Math.round(totalShortMinutes),
-                pay: Math.round(shortHoursPayDeduction)
-            },
+            overtime: { minutes: 0, pay: 0 },
+            shortHours: { minutes: 0, pay: 0 },
             deductions: {
-                lateDeduction: Math.round(lateDeductionAmount),
+                lateDeduction: 0,
                 absentDeduction: Math.round(absentDeductionAmount),
-                totalDeduction: Math.round(totalDeduction)
+                totalDeduction: Math.round(absentDeductionAmount)
             },
             netSalary: Math.round(Math.max(0, netSalary)),
             adminId: adminId

@@ -57,24 +57,6 @@ const Profile = () => {
     }, [user]);
 
     const calculateShiftStatus = () => {
-        if (!user?.workingHours?.start || !user?.workingHours?.end) return "Active (Shift Not Set)";
-
-        const parseTime = (timeStr) => {
-            const [hours, minutes] = timeStr.split(':').map(Number);
-            return hours * 60 + minutes;
-        };
-
-        const start = parseTime(user.workingHours.start);
-        const end = parseTime(user.workingHours.end);
-        let durationMinutes = end - start;
-
-        // Handle overnight shifts if needed (though existing structure likely assumes same day)
-        if (durationMinutes < 0) durationMinutes += 24 * 60;
-
-        const durationHours = durationMinutes / 60;
-
-        if (durationHours >= 8) return "Active Full-Time";
-        if (durationHours >= 4) return "Active Part-Time";
         return "Active (Flexible)";
     };
 
@@ -359,9 +341,9 @@ const Profile = () => {
                                     <p className="font-semibold">{user.department}</p>
                                 </div>
                                 <div className="space-y-1">
-                                    <label className="text-sm font-medium text-muted-foreground">Work Shift</label>
+                                    <label className="text-sm font-medium text-muted-foreground">Weekly Off Day</label>
                                     <p className="font-semibold">
-                                        {user.workingHours?.start} - {user.workingHours?.end}
+                                        {['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][Array.isArray(user.offDays) ? user.offDays[0] : 5]}
                                     </p>
                                 </div>
                             </div>

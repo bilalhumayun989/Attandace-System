@@ -163,7 +163,7 @@ const LeaveManagement = () => {
                     leaveQuota: 0,
                     extraHourlyRate: 0,
                     shortTimeHourlyRate: 0,
-                    offDays: [0] // Reset to Sunday only off
+                    offDays: [5] // Reset to Friday only off
                 }),
                 credentials: 'include'
             });

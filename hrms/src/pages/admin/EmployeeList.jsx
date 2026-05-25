@@ -30,21 +30,16 @@ const EmployeeList = () => {
     };
 
     const [formData, setFormData] = useState({
-        employeeId: '',
         firstName: '',
         lastName: '',
         department: '',
         role: '',
         salary: '',
-        extraHourlyRate: '',
-        workingHours: {
-            start: '09:00',
-            end: '18:00'
-        },
-        isOvertimeAllowed: false
     });
 
     const [employees, setEmployees] = useState([]);
+    // Dedicated offDay state — isolated from formData to prevent re-render conflicts
+    const [selectedOffDay, setSelectedOffDay] = useState(5);
 
     useEffect(() => {
         fetchEmployees();
@@ -73,16 +68,14 @@ const EmployeeList = () => {
     const handleEditClick = (employee) => {
         setEditingEmployee(employee);
         const [firstName, ...lastNameParts] = employee.name.split(' ');
+        const empOffDay = Array.isArray(employee.offDays) && employee.offDays.length > 0 ? Number(employee.offDays[0]) : 5;
+        setSelectedOffDay(empOffDay);
         setFormData({
-            employeeId: employee.employeeId || '',
             firstName,
             lastName: lastNameParts.join(' '),
             department: employee.department,
             role: employee.role,
             salary: employee.salary || '',
-            extraHourlyRate: employee.extraHourlyRate || '',
-            isOvertimeAllowed: employee.isOvertimeAllowed || false,
-            workingHours: employee.workingHours || { start: '09:00', end: '18:00' }
         });
         setIsEditModalOpen(true);
     };
@@ -101,15 +94,11 @@ const EmployeeList = () => {
                 },
                 credentials: 'include',
                 body: JSON.stringify({
-                    employeeId: formData.employeeId,
                     name: `${formData.firstName} ${formData.lastName}`,
-
                     department: formData.department,
                     role: formData.role,
-                    workingHours: formData.workingHours,
-                    salary: Number(formData.salary),
-                    extraHourlyRate: Number(formData.extraHourlyRate),
-                    isOvertimeAllowed: formData.isOvertimeAllowed
+                    salary: Number(formData.salary) || 0,
+                    offDays: [selectedOffDay],
                 }),
 
             });
@@ -148,13 +137,10 @@ const EmployeeList = () => {
                 credentials: 'include',
                 body: JSON.stringify({
                     name: `${formData.firstName} ${formData.lastName}`,
-
                     department: formData.department,
                     role: formData.role,
-                    workingHours: formData.workingHours,
-                    salary: Number(formData.salary),
-                    extraHourlyRate: Number(formData.extraHourlyRate),
-                    isOvertimeAllowed: formData.isOvertimeAllowed
+                    salary: Number(formData.salary) || 0,
+                    offDays: [selectedOffDay],
                 }),
             });
 
@@ -198,16 +184,13 @@ const EmployeeList = () => {
 
     const resetForm = () => {
         setFormData({
-            employeeId: '',
             firstName: '',
             lastName: '',
             department: '',
             role: '',
             salary: '',
-            extraHourlyRate: '',
-            isOvertimeAllowed: false,
-            workingHours: { start: '09:00', end: '18:00' }
         });
+        setSelectedOffDay(5);
         setEditingEmployee(null);
         setMessage({ type: '', text: '' });
     };
@@ -257,7 +240,7 @@ const EmployeeList = () => {
                                     <th className="h-10 px-4 py-3 align-middle">Name</th>
                                     <th className="h-10 px-4 py-3 align-middle hidden sm:table-cell">Role</th>
                                     <th className="h-10 px-4 py-3 align-middle hidden md:table-cell">Department</th>
-                                    <th className="h-10 px-4 py-3 align-middle hidden lg:table-cell">Shift</th>
+                                    <th className="h-10 px-4 py-3 align-middle hidden lg:table-cell">Off Day</th>
                                     <th className="h-10 px-4 py-3 align-middle">Status</th>
                                     <th className="h-10 px-4 py-3 align-middle hidden sm:table-cell">Face Status</th>
                                     <th className="h-10 px-4 py-3 align-middle text-right">Actions</th>
@@ -285,7 +268,7 @@ const EmployeeList = () => {
                                             </Badge>
                                         </td>
                                         <td className="p-4 align-middle hidden lg:table-cell whitespace-nowrap">
-                                            {employee.workingHours ? `${format12h(employee.workingHours.start)} - ${format12h(employee.workingHours.end)}` : 'N/A'}
+                                            {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][Array.isArray(employee.offDays) && employee.offDays.length > 0 && typeof employee.offDays[0] === 'number' ? employee.offDays[0] : 5] || 'Fri'} (Off)
                                         </td>
                                         <td className="p-4 align-middle">
                                             <Badge variant={employee.status === 'Active' ? 'success' : 'warning'}>
@@ -353,13 +336,16 @@ const EmployeeList = () => {
                         </div>
                     )}
 
-                    <div className="space-y-2">
-                        <label className="text-sm font-bold text-foreground/80">Employee ID</label>
-                        <Input name="employeeId" value={formData.employeeId} onChange={handleInputChange} placeholder="EMP-001" disabled={isEditModalOpen} className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all" />
-                    </div>
+                    {/* Employee ID is auto-generated — show read-only in edit mode */}
+                    {isEditModalOpen && (
+                        <div className="space-y-2">
+                            <label className="text-sm font-bold text-foreground/80">Employee ID</label>
+                            <Input value={editingEmployee?.employeeId || ''} disabled className="bg-muted/30 border-muted-foreground/20 opacity-60" />
+                            <p className="text-xs text-muted-foreground">Auto-assigned. Cannot be changed.</p>
+                        </div>
+                    )}
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-
                         <div className="space-y-2">
                             <label className="text-sm font-bold text-foreground/80">First Name</label>
                             <Input name="firstName" value={formData.firstName} onChange={handleInputChange} placeholder="John" className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all" />
@@ -368,10 +354,6 @@ const EmployeeList = () => {
                             <label className="text-sm font-bold text-foreground/80">Last Name</label>
                             <Input name="lastName" value={formData.lastName} onChange={handleInputChange} placeholder="Doe" className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all" />
                         </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
@@ -387,45 +369,48 @@ const EmployeeList = () => {
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                         <div className="space-y-2">
-                            <label className="text-sm font-bold text-foreground/80">Monthly Salary (PKR)</label>
-                            <Input name="salary" type="number" value={formData.salary} onChange={handleInputChange} placeholder="50000" className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all" />
-                        </div>
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                                <label className="text-sm font-bold text-foreground/80">Shift Start</label>
-                                <Input
-                                    type="time"
-                                    value={formData.workingHours.start}
-                                    onChange={(e) => setFormData(prev => ({ ...prev, workingHours: { ...prev.workingHours, start: e.target.value } }))}
-                                    className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-bold text-foreground/80">Shift End</label>
-                                <Input
-                                    type="time"
-                                    value={formData.workingHours.end}
-                                    onChange={(e) => setFormData(prev => ({ ...prev, workingHours: { ...prev.workingHours, end: e.target.value } }))}
-                                    className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all"
-                                />
-                            </div>
-                        </div>
-                        <div className="space-y-2">
-                            <label className="text-sm font-bold text-foreground/80">Overtime Rate (PKR/hr)</label>
-                            <Input name="extraHourlyRate" type="number" value={formData.extraHourlyRate} onChange={handleInputChange} placeholder="500" className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all" />
-                        </div>
-                        <div className="space-y-2 flex flex-col justify-end">
-                            <label className="flex items-center gap-3 cursor-pointer p-2 border border-muted/40 rounded-lg hover:bg-muted/10 transition-colors h-10">
-                                <input 
-                                    type="checkbox" 
-                                    className="w-4 h-4 text-primary rounded border-muted-foreground/30"
-                                    checked={formData.isOvertimeAllowed}
-                                    onChange={(e) => setFormData(prev => ({ ...prev, isOvertimeAllowed: e.target.checked }))}
-                                />
-                                <span className="text-sm font-bold text-foreground/80">Allow Overtime Tracking</span>
-                            </label>
+                            <label className="text-sm font-bold text-foreground/80">Monthly Salary (Rs)</label>
+                            <Input
+                                name="salary"
+                                type="number"
+                                value={formData.salary}
+                                onChange={handleInputChange}
+                                placeholder="e.g. 25000"
+                                min="0"
+                                className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all"
+                            />
+                            <p className="text-xs text-muted-foreground">Base monthly salary used for payroll calculation.</p>
                         </div>
                     </div>
+
+                        <div className="space-y-3">
+                            <label className="text-sm font-bold text-foreground/80">Weekly Off Day</label>
+                            <div className="flex flex-wrap gap-2">
+                                {[
+                                    { label: 'Sun', value: 0 },
+                                    { label: 'Mon', value: 1 },
+                                    { label: 'Tue', value: 2 },
+                                    { label: 'Wed', value: 3 },
+                                    { label: 'Thu', value: 4 },
+                                    { label: 'Fri', value: 5 },
+                                    { label: 'Sat', value: 6 },
+                                ].map((day) => (
+                                    <button
+                                        key={day.value}
+                                        type="button"
+                                        onClick={(e) => { e.stopPropagation(); setSelectedOffDay(day.value); }}
+                                        className={`px-4 py-2 rounded-lg text-xs font-bold transition-all border ${
+                                            selectedOffDay === day.value
+                                                ? 'bg-primary text-primary-foreground border-primary shadow-md'
+                                                : 'bg-background text-muted-foreground border-border hover:border-primary/50'
+                                        }`}
+                                    >
+                                        {day.label}
+                                    </button>
+                                ))}
+                            </div>
+                            <p className="text-xs text-muted-foreground">If employee works on this day, they earn 1.5× daily salary.</p>
+                        </div>
                 </div>
             </Modal>
         </div>
