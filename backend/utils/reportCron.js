@@ -107,12 +107,15 @@ const sendDailyReport = async () => {
     }
 };
 
-const autoGenerateAndSendPayroll = async (cycle) => {
+const autoGenerateAndSendPayroll = async (cycle, monthOffset = 0) => {
     try {
-        console.log(`[Cron] Starting auto payroll generation for cycle Till ${cycle}th...`);
+        console.log(`[Cron] Starting auto payroll generation for cycle ${cycle === 15 ? '1st-15th' : '16th-End'}...`);
         const { generatePayrollService } = require('../controllers/payrollController');
         
         const date = new Date();
+        if (monthOffset) {
+            date.setMonth(date.getMonth() - monthOffset);
+        }
         const monthStr = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
 
         const admins = await User.find({ role: 'Admin' });
@@ -134,7 +137,8 @@ const autoGenerateAndSendPayroll = async (cycle) => {
             
             // 2. Build Excel Report
             const workbook = new ExcelJS.Workbook();
-            const worksheet = workbook.addWorksheet(`Payroll_Cycle_${cycle}`);
+            const worksheetName = cycle === 15 ? '1st_to_15th' : '16th_to_End';
+            const worksheet = workbook.addWorksheet(`Payroll_${worksheetName}`);
 
             worksheet.columns = [
                 { header: 'Employee Name', key: 'name', width: 25 },
@@ -172,11 +176,11 @@ const autoGenerateAndSendPayroll = async (cycle) => {
             await transporter.sendMail({
                 from: `"HRMS Payroll Auto-Generator" <${process.env.EMAIL_USER}>`,
                 to: admin.email,
-                subject: `Auto Payroll Report - Cycle Till ${cycle}th (${monthStr})`,
-                text: `Hello ${admin.name},\n\nThe automated payroll for the cycle till the ${cycle}th of ${monthStr} has been generated successfully. Please find the detailed Excel report attached.\n\nRegards,\nHRMS Automation`,
+                subject: `Auto Payroll Report - Cycle ${cycle === 15 ? '1st-15th' : '16th-End'} (${monthStr})`,
+                text: `Hello ${admin.name},\n\nThe automated payroll for the cycle ${cycle === 15 ? '1st to 15th' : '16th to End'} of ${monthStr} has been generated successfully. Please find the detailed Excel report attached.\n\nRegards,\nHRMS Automation`,
                 attachments: [
                     {
-                        filename: `Payroll_Cycle_${cycle}_${monthStr}.xlsx`,
+                        filename: `Payroll_${cycle === 15 ? '1st-15th' : '16th-End'}_${monthStr}.xlsx`,
                         content: buffer
                     }
                 ]
@@ -204,17 +208,17 @@ cron.schedule('5 0 * * *', () => {
     timezone: "Asia/Karachi"
 });
 
-// Auto-Payroll: Run on the 7th of every month at 2:00 AM PKT
-cron.schedule('0 2 7 * *', () => {
-    autoGenerateAndSendPayroll(7);
+// Auto-Payroll: Run on the 2nd of every month at 2:00 AM PKT (Calculates for 16th-End of Previous Month)
+cron.schedule('0 2 2 * *', () => {
+    autoGenerateAndSendPayroll(31, 1);
 }, {
     scheduled: true,
     timezone: "Asia/Karachi"
 });
 
-// Auto-Payroll: Run on the 22nd of every month at 2:00 AM PKT
-cron.schedule('0 2 22 * *', () => {
-    autoGenerateAndSendPayroll(22);
+// Auto-Payroll: Run on the 17th of every month at 2:00 AM PKT (Calculates for 1st-15th of Current Month)
+cron.schedule('0 2 17 * *', () => {
+    autoGenerateAndSendPayroll(15, 0);
 }, {
     scheduled: true,
     timezone: "Asia/Karachi"

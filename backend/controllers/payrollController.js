@@ -28,20 +28,14 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
         
         let daysInMonth = new Date(reqYear, reqMonth, 0).getDate();
 
-        if (cycle === 7 || cycle === '7') {
-            // Cycle 7: 23rd of Prev Month -> 7th of Current Month
-            let prevYear = reqYear;
-            let prevMonth = reqMonth - 1;
-            if (prevMonth === 0) {
-                prevMonth = 12;
-                prevYear -= 1;
-            }
-            startDate = new Date(prevYear, prevMonth - 1, 23);
-            endDate = new Date(reqYear, reqMonth - 1, 7);
-        } else if (cycle === 22 || cycle === '22') {
-            // Cycle 22: 8th of Current Month -> 22nd of Current Month
-            startDate = new Date(reqYear, reqMonth - 1, 8);
-            endDate = new Date(reqYear, reqMonth - 1, 22);
+        if (cycle === 15 || cycle === '15') {
+            // Cycle 15: 1st of Current Month -> 15th of Current Month
+            startDate = new Date(reqYear, reqMonth - 1, 1);
+            endDate = new Date(reqYear, reqMonth - 1, 15);
+        } else if (cycle === 31 || cycle === '31') {
+            // Cycle 31: 16th of Current Month -> End of Current Month
+            startDate = new Date(reqYear, reqMonth - 1, 16);
+            endDate = new Date(reqYear, reqMonth, 0);
         } else {
             // Default Full Month
             startDate = new Date(reqYear, reqMonth - 1, 1);

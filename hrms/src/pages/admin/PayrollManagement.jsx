@@ -28,7 +28,10 @@ const PayrollManagement = () => {
 
     const [selectedMonth, setSelectedMonth] = useState(getCurrentMonth());
     const [selectedEmployeeId, setSelectedEmployeeId] = useState('All');
+    const [selectedDepartment, setSelectedDepartment] = useState('All');
     const [employees, setEmployees] = useState([]);
+    
+    const departments = [...new Set(employees.map(e => e.department).filter(Boolean))];
 
     useEffect(() => {
         fetchPayrolls();
@@ -177,6 +180,34 @@ const PayrollManagement = () => {
         }
     };
 
+    const handleTestCron = async (date) => {
+        if (!window.confirm(`Are you sure you want to trigger the automated email cron for date ${date}? This will send actual emails to admins.`)) return;
+        setLoading(true);
+        try {
+            const response = await fetch(`${API_BASE_URL}/payroll/test-cron`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Role-Context': 'Admin'
+                },
+                body: JSON.stringify({ date }),
+                credentials: 'include'
+            });
+
+            if (response.ok) {
+                alert(`Test cron for date ${date} triggered successfully and emails sent!`);
+            } else {
+                const data = await response.json();
+                alert(data.message || data.error || 'Failed to trigger cron');
+            }
+        } catch (error) {
+            console.error('Error triggering cron:', error);
+            alert('Error connecting to server');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const formatCurrency = (amount) => {
         return new Intl.NumberFormat('en-PK', {
             style: 'currency',
@@ -186,8 +217,9 @@ const PayrollManagement = () => {
     };
 
     const filteredPayrolls = payrolls.filter(p => {
-        if (selectedEmployeeId === 'All') return true;
-        return p.userId?._id === selectedEmployeeId;
+        const matchEmployee = selectedEmployeeId === 'All' || p.userId?._id === selectedEmployeeId;
+        const matchDepartment = selectedDepartment === 'All' || p.userId?.department === selectedDepartment;
+        return matchEmployee && matchDepartment;
     });
 
     const toggleExpand = (id) => {
@@ -222,6 +254,25 @@ const PayrollManagement = () => {
                             />
                         </div>
                     </div>
+
+                    <div className="flex items-center gap-3 px-4 py-3 border-b sm:border-b-0 sm:border-r border-slate-100 hover:bg-slate-50/50 transition-colors">
+                        <div className="bg-purple-50 p-2 rounded-lg">
+                            <Settings2 className="h-4 w-4 text-purple-600" />
+                        </div>
+                        <div className="flex flex-col flex-1">
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Department</span>
+                            <select
+                                value={selectedDepartment}
+                                onChange={(e) => setSelectedDepartment(e.target.value)}
+                                className="bg-transparent border-none focus:ring-0 text-sm font-bold text-slate-700 cursor-pointer min-w-[140px] p-0 h-7"
+                            >
+                                <option value="All">All Departments</option>
+                                {departments.map(dept => (
+                                    <option key={dept} value={dept}>{dept}</option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
                     
                     <div className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50/50 transition-colors">
                         <div className="bg-emerald-50 p-2 rounded-lg">
@@ -232,10 +283,12 @@ const PayrollManagement = () => {
                             <select
                                 value={selectedEmployeeId}
                                 onChange={(e) => setSelectedEmployeeId(e.target.value)}
-                                className="bg-transparent border-none focus:ring-0 text-sm font-bold text-slate-700 cursor-pointer min-w-[180px] p-0 h-7"
+                                className="bg-transparent border-none focus:ring-0 text-sm font-bold text-slate-700 cursor-pointer min-w-[160px] p-0 h-7"
                             >
                                 <option value="All">All Staff Members</option>
-                                {employees.map(emp => (
+                                {employees
+                                    .filter(emp => selectedDepartment === 'All' || emp.department === selectedDepartment)
+                                    .map(emp => (
                                     <option key={emp._id} value={emp._id}>{emp.name} {emp.employeeId ? `(${emp.employeeId})` : ''}</option>
                                 ))}
                             </select>
@@ -249,20 +302,20 @@ const PayrollManagement = () => {
                 <div className="flex flex-wrap items-center gap-4">
                     <div className="flex bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                         <Button
-                            onClick={() => handleGeneratePayroll(7)}
+                            onClick={() => handleGeneratePayroll(15)}
                             disabled={generatingCycle !== null}
                             className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold h-11 px-6 rounded-xl rounded-r-none border-r border-emerald-500 whitespace-nowrap transition-all active:scale-95"
                         >
-                            {generatingCycle === 7 ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <DollarSign className="mr-2 h-4 w-4" />}
-                            Calculate Till 7th
+                            {generatingCycle === 15 ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <DollarSign className="mr-2 h-4 w-4" />}
+                            Calculate 1st-15th
                         </Button>
                         <Button
-                            onClick={() => handleGeneratePayroll(22)}
+                            onClick={() => handleGeneratePayroll(31)}
                             disabled={generatingCycle !== null}
                             className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold h-11 px-6 rounded-xl rounded-l-none whitespace-nowrap transition-all active:scale-95"
                         >
-                            {generatingCycle === 22 ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <DollarSign className="mr-2 h-4 w-4" />}
-                            Calculate Till 22nd
+                            {generatingCycle === 31 ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <DollarSign className="mr-2 h-4 w-4" />}
+                            Calculate 16th-End
                         </Button>
                     </div>
 
@@ -314,6 +367,23 @@ const PayrollManagement = () => {
                                 className="h-9 bg-blue-600 hover:bg-blue-700 text-white font-bold px-6 rounded-lg"
                             >
                                 {generatingCycle === 'custom' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Run Calculation'}
+                            </Button>
+                        </div>
+
+                        <div className="flex items-center gap-2 pl-4 border-l border-muted/30">
+                            <Button 
+                                onClick={() => handleTestCron(17)}
+                                variant="outline"
+                                className="h-9 border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 hover:text-amber-800 font-bold text-xs"
+                            >
+                                Test 17th Cron (1st-15th)
+                            </Button>
+                            <Button 
+                                onClick={() => handleTestCron(2)}
+                                variant="outline"
+                                className="h-9 border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 hover:text-amber-800 font-bold text-xs"
+                            >
+                                Test 2nd Cron (16th-End)
                             </Button>
                         </div>
 
