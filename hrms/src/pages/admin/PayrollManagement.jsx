@@ -233,14 +233,15 @@ const PayrollManagement = () => {
     return (
         <div className="p-4 md:p-8 space-y-8 bg-slate-50/30 min-h-screen">
             {/* Header Section */}
-            <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
+            <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 md:gap-6">
                 <div className="space-y-1">
                     <h1 className="text-4xl font-black text-slate-900 tracking-tight">Payroll Management</h1>
                     <p className="text-slate-500 font-medium">Manage monthly salaries, attendance reconciliation, and automated deductions.</p>
                 </div>
-                
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-0 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                    <div className="flex items-center gap-3 px-4 py-3 border-b sm:border-b-0 sm:border-r border-slate-100 hover:bg-slate-50/50 transition-colors">
+
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto p-2">
+                    {/* Period */}
+                    <div className="flex items-center gap-3 px-3 py-2 border-b sm:border-b-0 sm:border-r border-slate-100 hover:bg-slate-50/50 transition-colors">
                         <div className="bg-blue-50 p-2 rounded-lg">
                             <Calendar className="h-4 w-4 text-blue-600" />
                         </div>
@@ -250,12 +251,13 @@ const PayrollManagement = () => {
                                 type="month"
                                 value={selectedMonth}
                                 onChange={(e) => setSelectedMonth(e.target.value)}
-                                className="h-7 border-none bg-transparent p-0 focus-visible:ring-0 font-bold text-slate-700 text-sm shadow-none"
+                                className="h-7 border-none bg-transparent p-0 focus-visible:ring-0 font-bold text-slate-700 text-sm shadow-none w-full"
                             />
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-3 px-4 py-3 border-b sm:border-b-0 sm:border-r border-slate-100 hover:bg-slate-50/50 transition-colors">
+                    {/* Department */}
+                    <div className="flex items-center gap-3 px-3 py-2 border-b sm:border-b-0 sm:border-r border-slate-100 hover:bg-slate-50/50 transition-colors">
                         <div className="bg-purple-50 p-2 rounded-lg">
                             <Settings2 className="h-4 w-4 text-purple-600" />
                         </div>
@@ -264,7 +266,7 @@ const PayrollManagement = () => {
                             <select
                                 value={selectedDepartment}
                                 onChange={(e) => setSelectedDepartment(e.target.value)}
-                                className="bg-transparent border-none focus:ring-0 text-sm font-bold text-slate-700 cursor-pointer min-w-[140px] p-0 h-7"
+                                className="bg-transparent border-none focus:ring-0 text-sm font-bold text-slate-700 cursor-pointer w-full h-7"
                             >
                                 <option value="All">All Departments</option>
                                 {departments.map(dept => (
@@ -273,8 +275,9 @@ const PayrollManagement = () => {
                             </select>
                         </div>
                     </div>
-                    
-                    <div className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50/50 transition-colors">
+
+                    {/* Employee Filter */}
+                    <div className="flex items-center gap-3 px-3 py-2 hover:bg-slate-50/50 transition-colors">
                         <div className="bg-emerald-50 p-2 rounded-lg">
                             <User className="h-4 w-4 text-emerald-600" />
                         </div>
@@ -283,14 +286,14 @@ const PayrollManagement = () => {
                             <select
                                 value={selectedEmployeeId}
                                 onChange={(e) => setSelectedEmployeeId(e.target.value)}
-                                className="bg-transparent border-none focus:ring-0 text-sm font-bold text-slate-700 cursor-pointer min-w-[160px] p-0 h-7"
+                                className="bg-transparent border-none focus:ring-0 text-sm font-bold text-slate-700 cursor-pointer w-full h-7"
                             >
                                 <option value="All">All Staff Members</option>
                                 {employees
                                     .filter(emp => selectedDepartment === 'All' || emp.department === selectedDepartment)
                                     .map(emp => (
-                                    <option key={emp._id} value={emp._id}>{emp.name} {emp.employeeId ? `(${emp.employeeId})` : ''}</option>
-                                ))}
+                                        <option key={emp._id} value={emp._id}>{emp.name} {emp.employeeId ? `(${emp.employeeId})` : ''}</option>
+                                    ))}
                             </select>
                         </div>
                     </div>
@@ -617,7 +620,10 @@ const PayrollManagement = () => {
                                                                                             <tr>
                                                                                                 <th className="p-1.5 text-[9px] font-bold text-slate-400 uppercase">Date</th>
                                                                                                 <th className="p-1.5 text-[9px] font-bold text-slate-400 uppercase">Work</th>
-                                                                                                <th className="p-1.5 text-[9px] font-bold text-slate-400 uppercase text-right">Earned/Ded</th>
+                                                                                                <th className="p-1.5 text-[9px] font-bold text-slate-400 uppercase text-right">Base</th>
+                                                                                                <th className="p-1.5 text-[9px] font-bold text-slate-400 uppercase text-right">Overtime</th>
+                                                                                                <th className="p-1.5 text-[9px] font-bold text-slate-400 uppercase text-right">Deduction</th>
+                                                                                                <th className="p-1.5 text-[9px] font-bold text-slate-400 uppercase text-right">Total</th>
                                                                                             </tr>
                                                                                         </thead>
                                                                                         <tbody>
@@ -636,12 +642,17 @@ const PayrollManagement = () => {
                                                                                                     <td className="p-1.5 text-[10px] font-bold text-slate-700">
                                                                                                         {day.workMinutes > 0 ? `${Math.floor(day.workMinutes / 60)}h` : '0h'}
                                                                                                     </td>
-                                                                                                    <td className="p-1.5 text-[10px] font-black text-right">
-                                                                                                        {day.deduction > 0 ? (
-                                                                                                            <span className="text-rose-500">-{formatCurrency(day.deduction)}</span>
-                                                                                                        ) : (
-                                                                                                            <span className="text-slate-900">{formatCurrency(day.earnedSalary)}</span>
-                                                                                                        )}
+                                                                                                    <td className="p-1.5 text-[10px] font-black text-right text-slate-600">
+                                                                                                        {formatCurrency(day.baseDaySalary || 0)}
+                                                                                                    </td>
+                                                                                                    <td className="p-1.5 text-[10px] font-black text-right text-emerald-500">
+                                                                                                        {day.overtimePay > 0 ? `+${formatCurrency(day.overtimePay)}` : '-'}
+                                                                                                    </td>
+                                                                                                    <td className="p-1.5 text-[10px] font-black text-right text-rose-500">
+                                                                                                        {day.deduction > 0 ? `-${formatCurrency(day.deduction)}` : '-'}
+                                                                                                    </td>
+                                                                                                    <td className="p-1.5 text-[10px] font-black text-right text-slate-900">
+                                                                                                        {formatCurrency(day.earnedSalary || 0)}
                                                                                                     </td>
                                                                                                 </tr>
                                                                                             ))}

@@ -80,7 +80,10 @@ const payrollSchema = new mongoose.Schema(
                 date: String,
                 status: String,
                 workMinutes: Number,
-                earnedSalary: Number
+                earnedSalary: Number,
+                baseDaySalary: Number,
+                overtimePay: Number,
+                deduction: Number
             }
         ],
 

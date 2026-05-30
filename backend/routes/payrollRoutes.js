@@ -5,7 +5,7 @@ const { protect, admin, requirePermission } = require('../middleware/authMiddlew
 
 router.post('/generate', protect, admin, requirePermission('payroll', 'edit'), generatePayroll);
 router.get('/', protect, admin, requirePermission('payroll', 'view'), getPayrolls);
-router.put('/:id/status', protect, admin, requirePermission('payroll', 'edit'), updatePayrollStatus);
+router.put('/:id', protect, admin, requirePermission('payroll', 'edit'), updatePayrollStatus);
 router.delete('/delete-all', protect, admin, requirePermission('payroll', 'edit'), deleteAllPayrolls);
 router.delete('/:id', protect, admin, requirePermission('payroll', 'edit'), deletePayroll);
 

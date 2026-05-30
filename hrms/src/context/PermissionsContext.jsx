@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext } from 'react';
 import { useAuth } from './AuthContext';
 
 const PermissionsContext = createContext({});
@@ -13,24 +13,21 @@ const ALL_PERMISSIONS = {
 
 export const PermissionsProvider = ({ children }) => {
     const { adminUser } = useAuth();
-    const [permissions, setPermissions] = useState(ALL_PERMISSIONS);
-    const [isOwner, setIsOwner] = useState(true);
 
-    useEffect(() => {
-        if (adminUser) {
-            if (adminUser.role === 'Admin') {
-                setPermissions(ALL_PERMISSIONS);
-                setIsOwner(true);
-            } else {
-                // Regular Employee or fallback
-                setPermissions(null);
-                setIsOwner(false);
-            }
+    // Derive state synchronously to prevent race conditions during Auth loading
+    let permissions = null;
+    let isOwner = false;
+
+    if (adminUser) {
+        if (adminUser.role === 'Admin') {
+            permissions = adminUser.permissions || ALL_PERMISSIONS;
+            isOwner = true;
         } else {
-            setPermissions(null);
-            setIsOwner(false);
+            // Regular Employee or fallback
+            permissions = null;
+            isOwner = false;
         }
-    }, [adminUser]);
+    }
 
     const can = (module, action) => {
         if (isOwner) return true;

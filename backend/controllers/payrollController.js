@@ -84,6 +84,10 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
         let absentDeductionAmount = 0;
         let totalEarnedSalary = 0;
 
+        // Overtime aggregation
+        let totalOvertimeMinutes = 0;
+        let totalOvertimePay = 0;
+
         let presentDays = 0;
         let offDaysPassed = 0;
 
@@ -92,6 +96,8 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
         // Normalize to UTC midnight for comparison
         userJoinDate.setUTCHours(0, 0, 0, 0);
         const dailyBreakdown = [];
+
+        let lastWorkingDayStatus = 'Unknown'; // Tracks if the employee was present or absent before an off-day
 
         // Iterate through every valid day in the cycle date range
         let loopDate = new Date(startDate);
@@ -139,10 +145,14 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                         dayPayLabel = 'Pre-Join Present (Half Day)';
                     }
                     totalEarnedSalary += dayEarnedSalary;
+                    lastWorkingDayStatus = 'Present';
+
                     dailyBreakdown.push({
                         date: dateString,
                         status: dayPayLabel,
                         workMinutes: baseMinutes,
+                        baseDaySalary: Math.round(dayEarnedSalary - (worked > 11 * 60 ? overtimePay : 0)),
+                        overtimePay: worked > 11 * 60 ? Math.round(overtimePay) : 0,
                         earnedSalary: Math.round(dayEarnedSalary)
                     });
                 } else {
@@ -150,10 +160,14 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                     totalAbsents++;
                     actualAbsents++;
                     absentDeductionAmount += perDaySalary;
+                    lastWorkingDayStatus = 'Absent';
+
                     dailyBreakdown.push({
                         date: dateString,
                         status: 'Pre-Join Absent',
                         workMinutes: 0,
+                        baseDaySalary: 0,
+                        overtimePay: 0,
                         earnedSalary: 0,
                         deduction: Math.round(perDaySalary)
                     });
@@ -165,13 +179,13 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
 
 
             // ── OFF DAY ──────────────────────────────────────────────────────────
-            // Off day always pays at least a full day (guaranteed floor).
-            // If employee works on off day, apply same bracket rules.
-            // Working > 11h on an off day also earns overtime on top.
+            // Off day pays a full day ONLY IF the employee was not absent on their last working day.
+            // If they were absent, the off day is unpaid.
+            // If employee works on off day, apply bracket rules.
             if (isOffDay && !isBeforeJoin) {
                 offDaysPassed++;
-                let dayEarnedSalary = perDaySalary; // guaranteed floor
-                let dayPayLabel = 'Off Day';
+                let dayEarnedSalary = (lastWorkingDayStatus === 'Absent') ? 0 : perDaySalary;
+                let dayPayLabel = (lastWorkingDayStatus === 'Absent') ? 'Off Day (Unpaid due to absence)' : 'Off Day';
                 let baseMinutes = 0;
 
                 if (record && record.checkIn && record.checkOut) {
@@ -204,6 +218,8 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                     date: dateString,
                     status: dayPayLabel,
                     workMinutes: baseMinutes,
+                    baseDaySalary: Math.round(dayEarnedSalary - (record?.duration > 11 * 60 ? overtimePay : 0)),
+                    overtimePay: record?.duration > 11 * 60 ? Math.round(overtimePay) : 0,
                     earnedSalary: Math.round(dayEarnedSalary)
                 });
                 loopDate.setDate(loopDate.getDate() + 1);
@@ -214,10 +230,14 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
             if (record && record.status === 'On Leave') {
                 totalLeavesTaken += 1;
                 totalEarnedSalary += perDaySalary;
+                lastWorkingDayStatus = 'Present'; // Treat paid leave as present for off-day sandwich rule
+
                 dailyBreakdown.push({
                     date: dateString,
                     status: 'On Leave',
                     workMinutes: 0,
+                    baseDaySalary: Math.round(perDaySalary),
+                    overtimePay: 0,
                     earnedSalary: Math.round(perDaySalary)
                 });
                 loopDate.setDate(loopDate.getDate() + 1);
@@ -231,14 +251,18 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                     totalLeavesTaken += 1;
                     isPaidLeave = true;
                     totalEarnedSalary += perDaySalary;
+                    lastWorkingDayStatus = 'Present'; // Paid leave preserves off-day pay
                 } else {
                     totalAbsents += 1;
                     absentDeductionAmount += perDaySalary;
+                    lastWorkingDayStatus = 'Absent';
                 }
                 dailyBreakdown.push({
                     date: dateString,
                     status: isPaidLeave ? 'Paid Leave' : 'Absent',
                     workMinutes: 0,
+                    baseDaySalary: isPaidLeave ? Math.round(perDaySalary) : 0,
+                    overtimePay: 0,
                     earnedSalary: isPaidLeave ? Math.round(perDaySalary) : 0,
                     deduction: isPaidLeave ? 0 : Math.round(perDaySalary)
                 });
@@ -276,6 +300,9 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                 if (baseMinutes > 11 * 60) {
                     dayEarnedSalary = perDaySalary + overtimePay;
                     dayPayLabel = 'Present (Full Day + Overtime)';
+                    // Accumulate overtime metrics
+                    totalOvertimeMinutes += (baseMinutes - 11 * 60);
+                    totalOvertimePay += overtimePay;
                 } else if (baseMinutes > 6 * 60) {
                     dayEarnedSalary = perDaySalary;
                     dayPayLabel = 'Present (Full Day)';
@@ -289,14 +316,18 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                 totalAbsents += 1;
                 actualAbsents += 1;
                 absentDeductionAmount += perDaySalary;
+                lastWorkingDayStatus = 'Absent';
             } else {
                 totalEarnedSalary += dayEarnedSalary;
+                lastWorkingDayStatus = 'Present';
             }
 
             dailyBreakdown.push({
                 date: dateString,
                 status: dayPayLabel,
                 workMinutes: baseMinutes,
+                baseDaySalary: Math.round(dayEarnedSalary - (baseMinutes > 11 * 60 ? overtimePay : 0)),
+                overtimePay: baseMinutes > 11 * 60 ? Math.round(overtimePay) : 0,
                 earnedSalary: Math.round(dayEarnedSalary),
                 ...(dayEarnedSalary === 0 && (!record || !record.checkOut) ? { deduction: Math.round(monthlySalary / 30) } : {})
             });
@@ -304,34 +335,50 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
             loopDate.setDate(loopDate.getDate() + 1);
         }
 
-        const netSalary = totalEarnedSalary;
-
-        // 6. Create Payroll Record (History tracking)
-        const payroll = await Payroll.create({
+        const netSalary = Math.max(0, Math.round(totalEarnedSalary));
+        const payrollData = {
             userId: user._id,
-            month: cycle ? `${month} (Till ${cycle})` : month,
+            adminId: adminId,
+            month: month || `${startDate.getFullYear()}-${(startDate.getMonth() + 1).toString().padStart(2, '0')}`,
             calculationStartDate: startStr,
             calculationEndDate: endStr,
             salary: monthlySalary,
-            payableDays: 30,
+            totalDays: totalDaysInCycle,
+            payableDays: totalDaysInCycle,
             offDays: offDaysPassed,
-            presentDays,
-            totalLates: 0,
-            totalAbsents,
-            actualAbsents,
-            dailyBreakdown,
-            overtime: { minutes: 0, pay: 0 },
-            shortHours: { minutes: 0, pay: 0 },
+            workingDays: totalDaysInCycle - offDaysPassed,
+            presentDays: presentDays,
+            totalAbsents: totalAbsents,
+            actualAbsents: actualAbsents,
+            totalLeaves: totalLeavesTaken,
+            overtime: {
+                minutes: totalOvertimeMinutes,
+                pay: Math.round(totalOvertimePay)
+            },
             deductions: {
-                lateDeduction: 0,
                 absentDeduction: Math.round(absentDeductionAmount),
                 totalDeduction: Math.round(absentDeductionAmount)
             },
-            netSalary: Math.round(Math.max(0, netSalary)),
+            dailyBreakdown: dailyBreakdown,
+            netSalary: netSalary,
+            status: 'Pending'
+        };
+
+        const existingPayroll = await Payroll.findOne({
+            userId: user._id,
+            month: payrollData.month,
             adminId: adminId
         });
 
-        payrolls.push(payroll);
+        if (existingPayroll) {
+            Object.assign(existingPayroll, payrollData);
+            await existingPayroll.save();
+            payrolls.push(existingPayroll);
+        } else {
+            const newPayroll = new Payroll(payrollData);
+            await newPayroll.save();
+            payrolls.push(newPayroll);
+        }
     }
 
     return payrolls;
