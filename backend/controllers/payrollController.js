@@ -89,44 +89,86 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
 
         const userOffDays = (user.offDays && user.offDays.length > 0) ? user.offDays : [5]; // Default Friday
         const userJoinDate = new Date(user.createdAt || new Date());
-        userJoinDate.setHours(0, 0, 0, 0);
+        // Normalize to UTC midnight for comparison
+        userJoinDate.setUTCHours(0, 0, 0, 0);
         const dailyBreakdown = [];
 
         // Iterate through every valid day in the cycle date range
         let loopDate = new Date(startDate);
 
         while (loopDate <= endDate) {
-            const day = loopDate.getDate();
-            const monthForDay = loopDate.getMonth() + 1;
             const yearForDay = loopDate.getFullYear();
+            const monthForDay = loopDate.getMonth() + 1;
+            const day = loopDate.getDate();
+            const dayStr = day.toString().padStart(2, '0');
+            const monthStrLoop = monthForDay.toString().padStart(2, '0');
+            const dateString = `${yearForDay}-${monthStrLoop}-${dayStr}`;
 
             // Payroll always uses a 30-day salary base
             const perDaySalary = monthlySalary / 30;
             const overtimePay = monthlySalary / 26;
 
-            const dayStr = day.toString().padStart(2, '0');
-            const monthStrLoop = monthForDay.toString().padStart(2, '0');
-            const dateString = `${yearForDay}-${monthStrLoop}-${dayStr}`;
-
             const dayOfWeek = loopDate.getDay();
             const isRegularOffDay = userOffDays.includes(dayOfWeek);
             const isVacation = user.vacations && user.vacations.includes(dateString);
             const isOffDay = isRegularOffDay || isVacation;
+            // Determine if this date is before the employee actually joined.
+            const isBeforeJoin = loopDate < userJoinDate;
 
             // date field is stored as plain "YYYY-MM-DD" string — direct match is safest
             const record = attendanceRecords.find(r => r.date === dateString);
+            // Custom handling for dates before employee join date
+            if (isBeforeJoin) {
+                // If admin added attendance before join, count as present; else absent.
+                if (record && record.checkIn && record.checkOut) {
+                    // Evaluate as normal present day
+                    const worked = record.duration || 0;
+                    let dayEarnedSalary = perDaySalary;
+                    let dayPayLabel = 'Pre-Join Present';
+                    let baseMinutes = worked;
+                    presentDays++;
 
-            // Skip days before user joined
-            if (loopDate < userJoinDate) {
+                    if (worked > 11 * 60) {
+                        dayEarnedSalary = perDaySalary + overtimePay;
+                        dayPayLabel = 'Pre-Join Present (Full Day + Overtime)';
+                    } else if (worked > 6 * 60) {
+                        dayEarnedSalary = perDaySalary;
+                        dayPayLabel = 'Pre-Join Present (Full Day)';
+                    } else {
+                        dayEarnedSalary = perDaySalary * 0.5;
+                        dayPayLabel = 'Pre-Join Present (Half Day)';
+                    }
+                    totalEarnedSalary += dayEarnedSalary;
+                    dailyBreakdown.push({
+                        date: dateString,
+                        status: dayPayLabel,
+                        workMinutes: baseMinutes,
+                        earnedSalary: Math.round(dayEarnedSalary)
+                    });
+                } else {
+                    // No attendance record → count as absent
+                    totalAbsents++;
+                    actualAbsents++;
+                    absentDeductionAmount += perDaySalary;
+                    dailyBreakdown.push({
+                        date: dateString,
+                        status: 'Pre-Join Absent',
+                        workMinutes: 0,
+                        earnedSalary: 0,
+                        deduction: Math.round(perDaySalary)
+                    });
+                }
                 loopDate.setDate(loopDate.getDate() + 1);
                 continue;
             }
+
+
 
             // ── OFF DAY ──────────────────────────────────────────────────────────
             // Off day always pays at least a full day (guaranteed floor).
             // If employee works on off day, apply same bracket rules.
             // Working > 11h on an off day also earns overtime on top.
-            if (isOffDay) {
+            if (isOffDay && !isBeforeJoin) {
                 offDaysPassed++;
                 let dayEarnedSalary = perDaySalary; // guaranteed floor
                 let dayPayLabel = 'Off Day';
@@ -256,7 +298,7 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                 status: dayPayLabel,
                 workMinutes: baseMinutes,
                 earnedSalary: Math.round(dayEarnedSalary),
-                ...(dayEarnedSalary === 0 && !record.checkOut ? { deduction: Math.round(monthlySalary / 30) } : {})
+                ...(dayEarnedSalary === 0 && (!record || !record.checkOut) ? { deduction: Math.round(monthlySalary / 30) } : {})
             });
 
             loopDate.setDate(loopDate.getDate() + 1);
