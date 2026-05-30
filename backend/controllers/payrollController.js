@@ -50,11 +50,12 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
         }
     }
 
-    // Cap the endDate to today so we don't penalize future days if generated early
-    const currentToday = new Date();
-    currentToday.setHours(0,0,0,0);
-    if (endDate > currentToday) {
-        endDate = new Date(currentToday);
+    // Cap the endDate to yesterday so we don't penalize future days or today if generated early
+    const currentYesterday = new Date();
+    currentYesterday.setDate(currentYesterday.getDate() - 1);
+    currentYesterday.setHours(0,0,0,0);
+    if (endDate > currentYesterday) {
+        endDate = new Date(currentYesterday);
     }
 
     if (startDate > endDate) {
@@ -108,7 +109,9 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
             const dateString = `${yearForDay}-${monthStrLoop}-${dayStr}`;
             
             const dayOfWeek = loopDate.getDay();
-            const isOffDay = userOffDays.includes(dayOfWeek);
+            const isRegularOffDay = userOffDays.includes(dayOfWeek);
+            const isVacation = user.vacations && user.vacations.includes(dateString);
+            const isOffDay = isRegularOffDay || isVacation;
 
             const record = attendanceRecords.find(r => r.date === dateString);
 
@@ -121,17 +124,17 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
             if (isOffDay) {
                 offDaysPassed++;
                 let dayEarnedSalary = perDaySalary;
-                let dayPayLabel = 'Off Day';
+                let dayPayLabel = isVacation ? 'Vacation' : 'Off Day';
                 let baseMinutes = 0;
 
                 if (record && record.checkIn && record.checkOut) {
                     baseMinutes = record.duration || 0;
                     dayEarnedSalary = perDaySalary * 1.5;
-                    dayPayLabel = 'Off Day (Worked — ×1.5)';
+                    dayPayLabel = isVacation ? 'Vacation (Worked — ×1.5)' : 'Off Day (Worked — ×1.5)';
                     presentDays++;
                 } else if (record && record.checkIn && !record.checkOut) {
                     dayEarnedSalary = perDaySalary;
-                    dayPayLabel = 'Off Day (Missed Checkout)';
+                    dayPayLabel = isVacation ? 'Vacation (Missed Checkout)' : 'Off Day (Missed Checkout)';
                 }
 
                 totalEarnedSalary += dayEarnedSalary;
@@ -154,7 +157,8 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                     date: dateString,
                     status: 'Absent (No Punch)',
                     workMinutes: 0,
-                    earnedSalary: 0
+                    earnedSalary: 0,
+                    deduction: Math.round(perDaySalary)
                 });
                 loopDate.setDate(loopDate.getDate() + 1);
                 continue;
@@ -175,7 +179,8 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                     date: dateString,
                     status: isPaidLeave ? 'Paid Leave' : 'Absent',
                     workMinutes: 0,
-                    earnedSalary: isPaidLeave ? Math.round(perDaySalary) : 0
+                    earnedSalary: isPaidLeave ? Math.round(perDaySalary) : 0,
+                    deduction: isPaidLeave ? 0 : Math.round(perDaySalary)
                 });
                 loopDate.setDate(loopDate.getDate() + 1);
                 continue;
@@ -194,7 +199,7 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                 continue;
             }
 
-            // Working day — apply new bracket-based payment logic
+            // Working day — new salary formula
             presentDays++;
             
             let baseMinutes = 0;
@@ -202,33 +207,63 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                 baseMinutes = record.duration || 0;
             }
 
+            // Approved overtime minutes
+            const overtimeMinutes = (record.overtimeStatus === 'Approved' && record.overtimeIn && record.overtimeOut)
+                ? Math.floor((new Date(record.overtimeOut) - new Date(record.overtimeIn)) / (1000 * 60))
+                : 0;
+
             let dayEarnedSalary = 0;
             let dayPayLabel = '';
 
-            if (!record.checkOut) {
+            if (!record.checkIn && !record.checkOut) {
+                // Admin-manually set record with just a status (no clock-in/out)
+                const adminStatus = record.status;
+                if (adminStatus === 'Present' || adminStatus === 'Late' || adminStatus === 'Short Hours') {
+                    // Treat as a full 8-hour day at base rate
+                    dayEarnedSalary = monthlySalary / 30 * 8;
+                    dayPayLabel = `${adminStatus} (Admin Override)`;
+                } else {
+                    // Absent or unknown — deduct
+                    dayEarnedSalary = 0;
+                    dayPayLabel = `${adminStatus} (Admin Override)`;
+                    totalAbsents += 1;
+                    absentDeductionAmount += monthlySalary / 30;
+                }
+            } else if (!record.checkOut) {
                 // Missed checkout — treat as absent
                 dayEarnedSalary = 0;
                 dayPayLabel = 'Missed Checkout';
                 totalAbsents += 1;
-                absentDeductionAmount += perDaySalary;
-            } else if (baseMinutes > 9 * 60) {
-                // More than 9 hours worked → count as 12 hours → daily salary × 1.5
-                dayEarnedSalary = perDaySalary * 1.5;
-                dayPayLabel = 'Present (12h — ×1.5)';
-            } else if (baseMinutes > 5 * 60) {
-                // More than 5 hours worked → count as full 8 hours → full day salary
-                dayEarnedSalary = perDaySalary;
-                dayPayLabel = 'Present (Full Day)';
-            } else if (baseMinutes > 1 * 60) {
-                // More than 1 hour worked → count as 4 hours → half day salary
-                dayEarnedSalary = perDaySalary * 0.5;
-                dayPayLabel = 'Present (Half Day)';
+                absentDeductionAmount += monthlySalary / 30;
             } else {
-                // Less than or equal to 1 hour — no pay (too short)
-                dayEarnedSalary = 0;
-                dayPayLabel = 'Present (No Pay — <1hr)';
-                totalAbsents += 1;
-                absentDeductionAmount += perDaySalary;
+                const hoursWorked = baseMinutes / 60;
+
+                // Base pay: salary/30 * hours_worked
+                // Cap at 8 hours for base pay purposes
+                const effectiveBaseHours = Math.min(hoursWorked, 8);
+                dayEarnedSalary = (monthlySalary / 30) * effectiveBaseHours;
+
+                if (hoursWorked >= 8) {
+                    dayPayLabel = 'Present (Full Day — 8h)';
+                } else if (hoursWorked >= 4) {
+                    dayPayLabel = `Present (${hoursWorked.toFixed(1)}h)`;
+                } else if (hoursWorked >= 1) {
+                    dayPayLabel = `Present (Short — ${hoursWorked.toFixed(1)}h)`;
+                } else {
+                    // Less than 1 hour — no pay
+                    dayEarnedSalary = 0;
+                    dayPayLabel = 'Present (No Pay — <1h)';
+                    totalAbsents += 1;
+                    absentDeductionAmount += monthlySalary / 30;
+                }
+
+                // Overtime pay: salary/26 * overtime_hours
+                if (overtimeMinutes > 0) {
+                    const overtimeHours = overtimeMinutes / 60;
+                    const overtimePay = (monthlySalary / 26) * overtimeHours;
+                    dayEarnedSalary += overtimePay;
+                    dayPayLabel += ` + OT(${overtimeHours.toFixed(1)}h)`;
+                }
             }
 
             totalEarnedSalary += dayEarnedSalary;
@@ -237,7 +272,8 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                 date: dateString,
                 status: dayPayLabel,
                 workMinutes: baseMinutes,
-                earnedSalary: Math.round(dayEarnedSalary)
+                earnedSalary: Math.round(dayEarnedSalary),
+                ...(dayEarnedSalary === 0 && !record.checkOut ? { deduction: Math.round(monthlySalary / 30) } : {})
             });
             
             loopDate.setDate(loopDate.getDate() + 1);

@@ -15,7 +15,8 @@ const {
     triggerManualReport,
     enrollFace,
     getFaceDescriptors,
-    faceCheckIn
+    faceCheckIn,
+    addCustomAttendance
 } = require('../controllers/attendanceController');
 const { protect, admin, requirePermission } = require('../middleware/authMiddleware');
 
@@ -40,6 +41,7 @@ router.get('/', admin, requirePermission('attendance', 'view'), getAllAttendance
 router.get('/user/:userId', admin, requirePermission('attendance', 'view'), getUserAttendanceHistory);
 router.post('/report/send', admin, requirePermission('attendance', 'view'), triggerManualReport);
 router.put('/overtime/approve/:id', admin, requirePermission('attendance', 'edit'), approveOvertime);
+router.post('/custom', admin, requirePermission('attendance', 'edit'), addCustomAttendance);
 router.put('/:id', admin, requirePermission('attendance', 'edit'), updateAttendance);
 
 // Face Recognition routes

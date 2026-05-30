@@ -64,6 +64,10 @@ const userSchema = new mongoose.Schema(
             type: [Number],
             default: [5], // Default Friday off (5 = Friday)
         },
+        vacations: {
+            type: [String], // Array of 'YYYY-MM-DD' strings
+            default: [],
+        },
         extraHourlyRate: {
             type: Number,
             default: 0,

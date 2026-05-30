@@ -25,10 +25,19 @@ const AttendanceTracker = () => {
     }, [attendanceData]);
     const [selectedRecord, setSelectedRecord] = useState(null);
     const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+    const [isCustomModalOpen, setIsCustomModalOpen] = useState(false);
     const [newStatus, setNewStatus] = useState('Present');
+    const [customForm, setCustomForm] = useState({
+        userId: '',
+        date: new Date().toISOString().split('T')[0],
+        checkIn: '',
+        checkOut: '',
+        status: 'Present'
+    });
     const [updateLoading, setUpdateLoading] = useState(false);
     
     const [selectedEmployeeId, setSelectedEmployeeId] = useState('All');
+    const [allEmployees, setAllEmployees] = useState([]);
     const { can } = usePermissions();
 
     // Month/Year Filtering
@@ -38,7 +47,23 @@ const AttendanceTracker = () => {
 
     useEffect(() => {
         fetchAttendance();
+        fetchAllEmployees();
     }, []);
+
+    const fetchAllEmployees = async () => {
+        try {
+            const response = await fetch(`${API_BASE_URL}/users`, {
+                headers: { 'X-Role-Context': 'Admin' },
+                credentials: 'include'
+            });
+            const data = await response.json();
+            if (response.ok) {
+                setAllEmployees(Array.isArray(data) ? data : []);
+            }
+        } catch (error) {
+            console.error('Error fetching employees:', error);
+        }
+    };
 
     const fetchAttendance = async () => {
         setLoading(true);
@@ -158,6 +183,34 @@ const AttendanceTracker = () => {
         }
     };
     
+    const handleAddCustomAttendance = async (e) => {
+        e.preventDefault();
+        if (!customForm.userId || !customForm.date) {
+            return alert("Employee and Date are required");
+        }
+        setUpdateLoading(true);
+        try {
+            const response = await fetch(`${API_BASE_URL}/attendance/custom`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Role-Context': 'Admin' },
+                body: JSON.stringify(customForm),
+                credentials: 'include'
+            });
+            const data = await response.json();
+            if (response.ok) {
+                alert('Attendance added successfully');
+                setIsCustomModalOpen(false);
+                fetchAttendance();
+            } else {
+                alert(data.message || 'Failed to add attendance');
+            }
+        } catch (error) {
+            alert('Error adding attendance');
+        } finally {
+            setUpdateLoading(false);
+        }
+    };
+    
     const handleOvertimeApproval = async (id, status, reason = '') => {
         try {
             const response = await fetch(`${API_BASE_URL}/attendance/overtime/approve/${id}`, {
@@ -234,6 +287,13 @@ const AttendanceTracker = () => {
                             {years.map(y => <option key={y} value={y}>{y}</option>)}
                         </select>
                     </div>
+                    <Button 
+                        onClick={() => setIsCustomModalOpen(true)}
+                        variant="outline"
+                        className="bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-100 font-semibold"
+                    >
+                        + Add Custom Attendance
+                    </Button>
                     <Button 
                         onClick={handleSendEmailReport} 
                         disabled={sendingReport} 
@@ -479,6 +539,79 @@ const AttendanceTracker = () => {
                     </div>
                 )}
             </Modal>
+
+            {/* Custom Add Attendance Modal */}
+            <Modal
+                isOpen={isCustomModalOpen}
+                onClose={() => setIsCustomModalOpen(false)}
+                title="Add Custom Attendance"
+                footer={
+                    <div className="flex justify-end gap-2 w-full">
+                        <Button variant="ghost" onClick={() => setIsCustomModalOpen(false)}>Cancel</Button>
+                        <Button onClick={handleAddCustomAttendance} disabled={updateLoading} className="bg-emerald-600 text-white hover:bg-emerald-700">Save Record</Button>
+                    </div>
+                }
+            >
+                <form onSubmit={handleAddCustomAttendance} className="space-y-4">
+                    <div className="space-y-2">
+                        <label className="text-sm font-bold">Select Employee *</label>
+                        <select 
+                            className="w-full h-10 rounded-md border border-input px-3 bg-white"
+                            value={customForm.userId}
+                            onChange={(e) => setCustomForm({...customForm, userId: e.target.value})}
+                            required
+                        >
+                            <option value="">-- Select Employee --</option>
+                            {allEmployees.map(emp => (
+                                <option key={emp._id} value={emp._id}>{emp.name} {emp.employeeId ? `(${emp.employeeId})` : ''}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                            <label className="text-sm font-bold">Date *</label>
+                            <Input 
+                                type="date" 
+                                value={customForm.date}
+                                onChange={(e) => setCustomForm({...customForm, date: e.target.value})}
+                                required
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-bold">Status</label>
+                            <select 
+                                className="w-full h-10 rounded-md border border-input px-3 bg-white"
+                                value={customForm.status}
+                                onChange={(e) => setCustomForm({...customForm, status: e.target.value})}
+                            >
+                                <option value="Present">Present</option>
+                                <option value="Absent">Absent</option>
+                                <option value="Late">Late</option>
+                                <option value="Short Hours">Short Hours</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                            <label className="text-sm font-bold">Check In Time</label>
+                            <Input 
+                                type="time" 
+                                value={customForm.checkIn}
+                                onChange={(e) => setCustomForm({...customForm, checkIn: e.target.value})}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-bold">Check Out Time</label>
+                            <Input 
+                                type="time" 
+                                value={customForm.checkOut}
+                                onChange={(e) => setCustomForm({...customForm, checkOut: e.target.value})}
+                            />
+                        </div>
+                    </div>
+                </form>
+            </Modal>
+
         </div>
     );
 };
