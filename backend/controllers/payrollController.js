@@ -379,20 +379,25 @@ const getPayrolls = async (req, res) => {
 const updatePayrollStatus = async (req, res) => {
     try {
         const { status } = req.body;
+        if (!status) {
+            return res.status(400).json({ message: 'Status is required' });
+        }
+        const allowed = ['Paid', 'Draft', 'Pending', 'Processing', 'Completed'];
+        if (!allowed.includes(status)) {
+            return res.status(400).json({ message: `Invalid status. Allowed: ${allowed.join(', ')}` });
+        }
         const payroll = await Payroll.findOne({ _id: req.params.id, adminId: req.adminId });
-
         if (!payroll) {
             return res.status(404).json({ message: 'Payroll record not found' });
         }
-
         if (status === 'Paid') {
             payroll.paidAt = new Date();
         }
-        payroll.status = status || payroll.status;
+        payroll.status = status;
         await payroll.save();
-
-        res.json({ message: `Payroll marked as ${status}`, payroll });
+        res.json({ message: `Payroll status updated to ${status}`, payroll });
     } catch (error) {
+        console.error('Error updating payroll status:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
     }
 };
