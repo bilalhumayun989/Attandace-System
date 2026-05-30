@@ -32,6 +32,7 @@ const LeaveManagement = () => {
     const [bulkExtraRate, setBulkExtraRate] = useState('');
     const [bulkShortHourlyRate, setBulkShortHourlyRate] = useState('');
     const [bulkOffDays, setBulkOffDays] = useState([]);
+    const [bulkVacations, setBulkVacations] = useState([]);
 
     const [message, setMessage] = useState({ text: '', type: '' });
 
@@ -86,6 +87,21 @@ const LeaveManagement = () => {
         setBulkOffDays(prev => prev.includes(val) ? prev.filter(x => x !== val) : [...prev, val]);
     };
 
+    const addVacationDate = () => {
+        const dateInput = document.getElementById('vacation-date-input');
+        if (dateInput && dateInput.value) {
+            const dateStr = dateInput.value;
+            if (!bulkVacations.includes(dateStr)) {
+                setBulkVacations([...bulkVacations, dateStr]);
+            }
+            dateInput.value = '';
+        }
+    };
+
+    const removeVacationDate = (dateStr) => {
+        setBulkVacations(bulkVacations.filter(d => d !== dateStr));
+    };
+
     const handleBulkUpdate = async () => {
         if (selectedIds.length === 0) {
             setMessage({ text: 'Select at least one employee', type: 'error' });
@@ -97,6 +113,7 @@ const LeaveManagement = () => {
         if (bulkExtraRate !== '') payload.extraHourlyRate = Number(bulkExtraRate);
         if (bulkShortHourlyRate !== '') payload.shortTimeHourlyRate = Number(bulkShortHourlyRate);
         if (bulkOffDays.length > 0) payload.offDays = bulkOffDays;
+        if (bulkVacations.length > 0) payload.vacations = bulkVacations;
 
         if (Object.keys(payload).length === 1) {
             setMessage({ text: 'Enter at least one field to update', type: 'error' });
@@ -122,6 +139,7 @@ const LeaveManagement = () => {
                 setBulkExtraRate('');
                 setBulkShortHourlyRate('');
                 setBulkOffDays([]);
+                setBulkVacations([]);
                 fetchFilteredEmployees(); // Refresh list
             } else {
                 setMessage({ text: data.message || 'Update failed', type: 'error' });
@@ -332,6 +350,26 @@ const LeaveManagement = () => {
                                     </button>
                                 ))}
                             </div>
+                        </div>
+
+                        <div className="space-y-3">
+                            <label className="text-xs font-bold uppercase text-muted-foreground flex items-center gap-1.5">
+                                <Calendar className="w-3.5 h-3.5" /> Configure Specific Vacation Days
+                            </label>
+                            <div className="flex flex-wrap gap-2 items-center">
+                                <Input type="date" className="w-auto h-9 border-input" id="vacation-date-input" />
+                                <Button size="sm" variant="outline" onClick={addVacationDate}>Add Date</Button>
+                            </div>
+                            {bulkVacations.length > 0 && (
+                                <div className="flex flex-wrap gap-2 mt-2">
+                                    {bulkVacations.sort().map(date => (
+                                        <span key={date} className="text-xs font-bold bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-md flex items-center gap-1.5 border border-indigo-200 shadow-sm">
+                                            {new Date(date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                                            <X className="w-3 h-3 cursor-pointer hover:text-rose-500 transition-colors" onClick={() => removeVacationDate(date)} />
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
                         </div>
 
                         <div className="flex justify-end pt-2">

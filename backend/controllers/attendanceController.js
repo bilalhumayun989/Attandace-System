@@ -80,7 +80,7 @@ const reconcileAttendance = async (userId) => {
             const dayOfWeek = current.getDay();
 
             if (!recordMap.has(dateStr)) {
-                if (!userOffDays.includes(dayOfWeek)) {
+                if (!userOffDays.includes(dayOfWeek) && !(user.vacations && user.vacations.includes(dateStr))) {
                     newRecords.push({
                         userId,
                         date: dateStr,
@@ -239,6 +239,57 @@ const getStats = async (req, res) => {
             todayStatus: todayRecord ? todayRecord.status : 'Not Started',
             absents: totalAbsents
         });
+    } catch (error) {
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
+// @desc    Add Custom Attendance (Admin)
+// @route   POST /api/attendance/custom
+// @access  Private/Admin
+const addCustomAttendance = async (req, res) => {
+    try {
+        const { userId, date, checkIn, checkOut, status } = req.body;
+        
+        const user = await User.findOne({ _id: userId, adminId: req.adminId });
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        let attendance = await Attendance.findOne({ userId, date });
+        
+        // Parse time if provided
+        let checkInDate = null;
+        let checkOutDate = null;
+        if (checkIn) {
+            checkInDate = new Date(`${date}T${checkIn}:00+05:00`);
+        }
+        if (checkOut) {
+            checkOutDate = new Date(`${date}T${checkOut}:00+05:00`);
+        }
+
+        if (attendance) {
+            if (checkInDate) attendance.checkIn = checkInDate;
+            if (checkOutDate) attendance.checkOut = checkOutDate;
+            if (status) attendance.status = status;
+        } else {
+            attendance = new Attendance({
+                userId,
+                adminId: req.adminId,
+                date,
+                checkIn: checkInDate,
+                checkOut: checkOutDate,
+                status: status || 'Present'
+            });
+        }
+
+        if (attendance.checkIn && attendance.checkOut) {
+            const durationMs = attendance.checkOut - attendance.checkIn;
+            const totalDurationMins = Math.floor(durationMs / (1000 * 60));
+            attendance.duration = totalDurationMins > 0 ? totalDurationMins : 0;
+        }
+
+        await attendance.save();
+
+        res.status(201).json({ message: 'Attendance recorded successfully', attendance });
     } catch (error) {
         res.status(500).json({ message: 'Server error', error: error.message });
     }
@@ -545,5 +596,7 @@ module.exports = {
     triggerManualReport,
     enrollFace,
     getFaceDescriptors,
-    faceCheckIn
+    faceCheckIn,
+    addCustomAttendance
 };
+

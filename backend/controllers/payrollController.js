@@ -109,7 +109,9 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
             const dateString = `${yearForDay}-${monthStrLoop}-${dayStr}`;
 
             const dayOfWeek = loopDate.getDay();
-            const isOffDay = userOffDays.includes(dayOfWeek);
+            const isRegularOffDay = userOffDays.includes(dayOfWeek);
+            const isVacation = user.vacations && user.vacations.includes(dateString);
+            const isOffDay = isRegularOffDay || isVacation;
 
             // date field is stored as plain "YYYY-MM-DD" string — direct match is safest
             const record = attendanceRecords.find(r => r.date === dateString);
@@ -151,7 +153,7 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                 } else if (record && record.checkIn && !record.checkOut) {
                     // Checked in but no checkout on off day — still pay off-day rate
                     dayEarnedSalary = perDaySalary;
-                    dayPayLabel = 'Off Day (Missed Checkout)';
+                    dayPayLabel = isVacation ? 'Vacation (Missed Checkout)' : 'Off Day (Missed Checkout)';
                 }
                 // No record at all → default off-day pay already set above
 
@@ -195,7 +197,8 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                     date: dateString,
                     status: isPaidLeave ? 'Paid Leave' : 'Absent',
                     workMinutes: 0,
-                    earnedSalary: isPaidLeave ? Math.round(perDaySalary) : 0
+                    earnedSalary: isPaidLeave ? Math.round(perDaySalary) : 0,
+                    deduction: isPaidLeave ? 0 : Math.round(perDaySalary)
                 });
                 loopDate.setDate(loopDate.getDate() + 1);
                 continue;
@@ -252,7 +255,8 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                 date: dateString,
                 status: dayPayLabel,
                 workMinutes: baseMinutes,
-                earnedSalary: Math.round(dayEarnedSalary)
+                earnedSalary: Math.round(dayEarnedSalary),
+                ...(dayEarnedSalary === 0 && !record.checkOut ? { deduction: Math.round(monthlySalary / 30) } : {})
             });
 
             loopDate.setDate(loopDate.getDate() + 1);

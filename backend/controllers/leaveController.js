@@ -73,7 +73,7 @@ const getFilteredEmployees = async (req, res) => {
 // @access  Private/Admin
 const bulkUpdateEmployees = async (req, res) => {
     try {
-        const { employeeIds, leaveQuota, extraHourlyRate, shortTimeHourlyRate, offDays } = req.body;
+        const { employeeIds, leaveQuota, extraHourlyRate, shortTimeHourlyRate, offDays, vacations } = req.body;
         
         if (!employeeIds || !employeeIds.length) {
             return res.status(400).json({ message: 'No employees selected' });
@@ -84,6 +84,7 @@ const bulkUpdateEmployees = async (req, res) => {
         if (extraHourlyRate !== undefined) updateData.extraHourlyRate = extraHourlyRate;
         if (shortTimeHourlyRate !== undefined) updateData.shortTimeHourlyRate = shortTimeHourlyRate;
         if (offDays !== undefined) updateData.offDays = offDays;
+        if (vacations !== undefined) updateData.vacations = vacations;
         
         const result = await User.updateMany(
             { _id: { $in: employeeIds }, adminId: req.adminId },

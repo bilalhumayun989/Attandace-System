@@ -617,7 +617,7 @@ const PayrollManagement = () => {
                                                                                             <tr>
                                                                                                 <th className="p-1.5 text-[9px] font-bold text-slate-400 uppercase">Date</th>
                                                                                                 <th className="p-1.5 text-[9px] font-bold text-slate-400 uppercase">Work</th>
-                                                                                                <th className="p-1.5 text-[9px] font-bold text-slate-400 uppercase text-right">Earned</th>
+                                                                                                <th className="p-1.5 text-[9px] font-bold text-slate-400 uppercase text-right">Earned/Ded</th>
                                                                                             </tr>
                                                                                         </thead>
                                                                                         <tbody>
@@ -636,8 +636,12 @@ const PayrollManagement = () => {
                                                                                                     <td className="p-1.5 text-[10px] font-bold text-slate-700">
                                                                                                         {day.workMinutes > 0 ? `${Math.floor(day.workMinutes / 60)}h` : '0h'}
                                                                                                     </td>
-                                                                                                    <td className="p-1.5 text-[10px] font-black text-slate-900 text-right">
-                                                                                                        {formatCurrency(day.earnedSalary)}
+                                                                                                    <td className="p-1.5 text-[10px] font-black text-right">
+                                                                                                        {day.deduction > 0 ? (
+                                                                                                            <span className="text-rose-500">-{formatCurrency(day.deduction)}</span>
+                                                                                                        ) : (
+                                                                                                            <span className="text-slate-900">{formatCurrency(day.earnedSalary)}</span>
+                                                                                                        )}
                                                                                                     </td>
                                                                                                 </tr>
                                                                                             ))}
