@@ -11,7 +11,7 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
     if (!month && !customStart) throw new Error('Month or Custom Date Range is required');
 
     const query = { role: { $ne: 'Admin' }, adminId: adminId };
-    
+
     const employees = await User.find(query);
     const payrolls = [];
 
@@ -25,7 +25,7 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
         const [yearStr, monthStr] = month.split('-');
         const reqYear = parseInt(yearStr, 10);
         const reqMonth = parseInt(monthStr, 10);
-        
+
         let daysInMonth = new Date(reqYear, reqMonth, 0).getDate();
 
         if (cycle === 15 || cycle === '15') {
@@ -40,7 +40,7 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
             // Default Full Month
             startDate = new Date(reqYear, reqMonth - 1, 1);
             endDate = new Date(reqYear, reqMonth - 1, daysInMonth);
-            
+
             const today = new Date();
             if (today.getFullYear() === reqYear && (today.getMonth() + 1) === reqMonth) {
                 endDate = new Date(reqYear, reqMonth - 1, today.getDate());
@@ -52,7 +52,7 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
 
     // Cap the endDate to today so we don't penalize future days if generated early
     const currentToday = new Date();
-    currentToday.setHours(0,0,0,0);
+    currentToday.setHours(0, 0, 0, 0);
     if (endDate > currentToday) {
         endDate = new Date(currentToday);
     }
@@ -62,8 +62,8 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
     }
 
     // Format dates for DB querying
-    const startStr = `${startDate.getFullYear()}-${(startDate.getMonth()+1).toString().padStart(2,'0')}-${startDate.getDate().toString().padStart(2,'0')}`;
-    const endStr = `${endDate.getFullYear()}-${(endDate.getMonth()+1).toString().padStart(2,'0')}-${endDate.getDate().toString().padStart(2,'0')}`;
+    const startStr = `${startDate.getFullYear()}-${(startDate.getMonth() + 1).toString().padStart(2, '0')}-${startDate.getDate().toString().padStart(2, '0')}`;
+    const endStr = `${endDate.getFullYear()}-${(endDate.getMonth() + 1).toString().padStart(2, '0')}-${endDate.getDate().toString().padStart(2, '0')}`;
     const totalDaysInCycle = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
 
     for (const user of employees) {
@@ -77,39 +77,41 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
         });
 
         const monthlySalary = user.salary || 0;
-        
-        let totalAbsents = 0; 
-        let actualAbsents = 0; 
+
+        let totalAbsents = 0;
+        let actualAbsents = 0;
         let totalLeavesTaken = 0;
         let absentDeductionAmount = 0;
         let totalEarnedSalary = 0;
-        
+
         let presentDays = 0;
         let offDaysPassed = 0;
 
         const userOffDays = (user.offDays && user.offDays.length > 0) ? user.offDays : [5]; // Default Friday
         const userJoinDate = new Date(user.createdAt || new Date());
-        userJoinDate.setHours(0,0,0,0);
+        userJoinDate.setHours(0, 0, 0, 0);
         const dailyBreakdown = [];
 
         // Iterate through every valid day in the cycle date range
         let loopDate = new Date(startDate);
-        
+
         while (loopDate <= endDate) {
             const day = loopDate.getDate();
             const monthForDay = loopDate.getMonth() + 1;
             const yearForDay = loopDate.getFullYear();
-            
-            const daysInCurrentLoopMonth = new Date(yearForDay, monthForDay, 0).getDate();
-            const perDaySalary = monthlySalary / daysInCurrentLoopMonth;
+
+            // Payroll always uses a 30-day salary base
+            const perDaySalary = monthlySalary / 30;
+            const overtimePay = monthlySalary / 26;
 
             const dayStr = day.toString().padStart(2, '0');
             const monthStrLoop = monthForDay.toString().padStart(2, '0');
             const dateString = `${yearForDay}-${monthStrLoop}-${dayStr}`;
-            
+
             const dayOfWeek = loopDate.getDay();
             const isOffDay = userOffDays.includes(dayOfWeek);
 
+            // date field is stored as plain "YYYY-MM-DD" string — direct match is safest
             const record = attendanceRecords.find(r => r.date === dateString);
 
             // Skip days before user joined
@@ -118,21 +120,40 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                 continue;
             }
 
+            // ── OFF DAY ──────────────────────────────────────────────────────────
+            // Off day always pays at least a full day (guaranteed floor).
+            // If employee works on off day, apply same bracket rules.
+            // Working > 11h on an off day also earns overtime on top.
             if (isOffDay) {
                 offDaysPassed++;
-                let dayEarnedSalary = perDaySalary;
+                let dayEarnedSalary = perDaySalary; // guaranteed floor
                 let dayPayLabel = 'Off Day';
                 let baseMinutes = 0;
 
                 if (record && record.checkIn && record.checkOut) {
-                    baseMinutes = record.duration || 0;
-                    dayEarnedSalary = perDaySalary * 1.5;
-                    dayPayLabel = 'Off Day (Worked — ×1.5)';
+                    const worked = record.duration || 0;
+                    baseMinutes = worked;
                     presentDays++;
+
+                    if (worked > 11 * 60) {
+                        // > 11h → full day pay + overtime bonus
+                        dayEarnedSalary = perDaySalary + overtimePay;
+                        dayPayLabel = 'Off Day (Worked — Full Day + Overtime)';
+                    } else if (worked > 6 * 60) {
+                        // > 6h ≤ 11h → full day (same as off-day floor, no extra)
+                        dayEarnedSalary = perDaySalary;
+                        dayPayLabel = 'Off Day (Worked — Full Day)';
+                    } else {
+                        // ≤ 6h → half-day work but off-day floor keeps it at full day
+                        dayEarnedSalary = perDaySalary;
+                        dayPayLabel = 'Off Day (Worked — Half Day, Off Day Rate Applied)';
+                    }
                 } else if (record && record.checkIn && !record.checkOut) {
+                    // Checked in but no checkout on off day — still pay off-day rate
                     dayEarnedSalary = perDaySalary;
                     dayPayLabel = 'Off Day (Missed Checkout)';
                 }
+                // No record at all → default off-day pay already set above
 
                 totalEarnedSalary += dayEarnedSalary;
                 dailyBreakdown.push({
@@ -142,26 +163,25 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                     earnedSalary: Math.round(dayEarnedSalary)
                 });
                 loopDate.setDate(loopDate.getDate() + 1);
-                continue; 
+                continue;
             }
 
-            // No attendance record at all (absent)
-            if (!record) {
-                totalAbsents += 1;
-                actualAbsents += 1;
-                absentDeductionAmount += perDaySalary;
+            // ── EXPLICIT LEAVE STATUSES ──────────────────────────────────────────
+            if (record && record.status === 'On Leave') {
+                totalLeavesTaken += 1;
+                totalEarnedSalary += perDaySalary;
                 dailyBreakdown.push({
                     date: dateString,
-                    status: 'Absent (No Punch)',
+                    status: 'On Leave',
                     workMinutes: 0,
-                    earnedSalary: 0
+                    earnedSalary: Math.round(perDaySalary)
                 });
                 loopDate.setDate(loopDate.getDate() + 1);
                 continue;
             }
 
-            // Leave-related statuses
-            if (record.status === 'Absent') {
+            if (record && record.status === 'Absent') {
+                // Explicitly marked Absent — check leave quota
                 let isPaidLeave = false;
                 if (totalLeavesTaken < (user.leaveQuota || 0)) {
                     totalLeavesTaken += 1;
@@ -181,57 +201,52 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                 continue;
             }
 
-            if (record.status === 'On Leave') {
-                totalLeavesTaken += 1;
-                totalEarnedSalary += perDaySalary;
-                dailyBreakdown.push({
-                    date: dateString,
-                    status: 'On Leave',
-                    workMinutes: 0,
-                    earnedSalary: Math.round(perDaySalary)
-                });
-                loopDate.setDate(loopDate.getDate() + 1);
-                continue;
-            }
-
-            // Working day — apply new bracket-based payment logic
-            presentDays++;
-            
-            let baseMinutes = 0;
-            if (record.checkIn && record.checkOut) {
-                baseMinutes = record.duration || 0;
-            }
-
+            // ── REGULAR WORKING DAY ──────────────────────────────────────────────
+            // Rule 1: No check-in record → Absent (salary = 0)
+            // Rule 2: Check-in exists but no check-out → Absent (salary = 0)
+            // Rule 3: Both present → evaluate by duration:
+            //   ≤ 6h  → Half Day  (50%)
+            //   > 6h ≤ 11h → Full Day (100%)
+            //   > 11h → Full Day + Overtime
             let dayEarnedSalary = 0;
             let dayPayLabel = '';
+            let baseMinutes = 0;
+            let isAbsent = false;
 
-            if (!record.checkOut) {
-                // Missed checkout — treat as absent
+            if (!record || !record.checkIn) {
+                // No punch at all
                 dayEarnedSalary = 0;
-                dayPayLabel = 'Missed Checkout';
-                totalAbsents += 1;
-                absentDeductionAmount += perDaySalary;
-            } else if (baseMinutes > 9 * 60) {
-                // More than 9 hours worked → count as 12 hours → daily salary × 1.5
-                dayEarnedSalary = perDaySalary * 1.5;
-                dayPayLabel = 'Present (12h — ×1.5)';
-            } else if (baseMinutes > 5 * 60) {
-                // More than 5 hours worked → count as full 8 hours → full day salary
-                dayEarnedSalary = perDaySalary;
-                dayPayLabel = 'Present (Full Day)';
-            } else if (baseMinutes > 1 * 60) {
-                // More than 1 hour worked → count as 4 hours → half day salary
-                dayEarnedSalary = perDaySalary * 0.5;
-                dayPayLabel = 'Present (Half Day)';
+                dayPayLabel = 'Absent (No Punch)';
+                isAbsent = true;
+            } else if (!record.checkOut) {
+                // Check-in but no check-out → treat as absent
+                dayEarnedSalary = 0;
+                dayPayLabel = 'Absent (Missed Checkout)';
+                isAbsent = true;
             } else {
-                // Less than or equal to 1 hour — no pay (too short)
-                dayEarnedSalary = 0;
-                dayPayLabel = 'Present (No Pay — <1hr)';
-                totalAbsents += 1;
-                absentDeductionAmount += perDaySalary;
+                // Full punch — evaluate duration bracket
+                baseMinutes = record.duration || 0;
+                presentDays++;
+
+                if (baseMinutes > 11 * 60) {
+                    dayEarnedSalary = perDaySalary + overtimePay;
+                    dayPayLabel = 'Present (Full Day + Overtime)';
+                } else if (baseMinutes > 6 * 60) {
+                    dayEarnedSalary = perDaySalary;
+                    dayPayLabel = 'Present (Full Day)';
+                } else {
+                    dayEarnedSalary = perDaySalary * 0.5;
+                    dayPayLabel = 'Present (Half Day)';
+                }
             }
 
-            totalEarnedSalary += dayEarnedSalary;
+            if (isAbsent) {
+                totalAbsents += 1;
+                actualAbsents += 1;
+                absentDeductionAmount += perDaySalary;
+            } else {
+                totalEarnedSalary += dayEarnedSalary;
+            }
 
             dailyBreakdown.push({
                 date: dateString,
@@ -239,7 +254,7 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                 workMinutes: baseMinutes,
                 earnedSalary: Math.round(dayEarnedSalary)
             });
-            
+
             loopDate.setDate(loopDate.getDate() + 1);
         }
 
@@ -252,7 +267,7 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
             calculationStartDate: startStr,
             calculationEndDate: endStr,
             salary: monthlySalary,
-            payableDays: totalDaysInCycle,
+            payableDays: 30,
             offDays: offDaysPassed,
             presentDays,
             totalLates: 0,
@@ -282,9 +297,9 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
 const generatePayroll = async (req, res) => {
     try {
         const { month, userId, cycle, customStart, customEnd } = req.body;
-        
+
         const payrolls = await generatePayrollService(req.adminId, month, cycle, customStart, customEnd);
-        
+
         // If a specific userId was requested, filter the result before sending
         const finalPayrolls = userId ? payrolls.filter(p => p.userId.toString() === userId.toString()) : payrolls;
 
