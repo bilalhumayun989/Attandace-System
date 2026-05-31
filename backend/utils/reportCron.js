@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const Attendance = require('../models/Attendance');
 const User = require('../models/User');
+const Payroll = require('../models/Payroll');
 const ExcelJS = require('exceljs');
 const nodemailer = require('nodemailer');
 const { formatInTimeZone } = require('date-fns-tz');
@@ -134,6 +135,9 @@ const autoGenerateAndSendPayroll = async (cycle, monthOffset = 0) => {
             const payrolls = await generatePayrollService(admin._id, monthStr, cycle);
             
             if (payrolls.length === 0) continue; // Skip if no employees
+
+            // Populate userId to get name and department for the report
+            await Payroll.populate(payrolls, { path: 'userId', select: 'name department employeeId status' });
             
             // 2. Build Excel Report
             const workbook = new ExcelJS.Workbook();
@@ -153,8 +157,9 @@ const autoGenerateAndSendPayroll = async (cycle, monthOffset = 0) => {
             ];
 
             payrolls.forEach(p => {
+                const isDeleted = p.userId?.status === 'Deleted' ? ' (Deleted)' : '';
                 worksheet.addRow({
-                    name: p.userId?.name || 'Unknown',
+                    name: (p.userId?.name || 'Unknown') + isDeleted,
                     dept: p.userId?.department || '-',
                     base: `Rs ${p.salary}`,
                     days: p.payableDays,

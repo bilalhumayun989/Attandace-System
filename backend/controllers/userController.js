@@ -546,7 +546,7 @@ const updateUser = async (req, res) => {
     }
 };
 
-// @desc    Delete employee
+// @desc    Delete employee (Soft Delete)
 // @route   DELETE /api/users/:id
 // @access  Private/Admin
 const deleteUser = async (req, res) => {
@@ -559,8 +559,9 @@ const deleteUser = async (req, res) => {
                 return res.status(403).json({ message: 'Admins cannot be deleted through this endpoint' });
             }
 
-            await user.deleteOne();
-            res.json({ message: 'User removed' });
+            user.status = 'Deleted';
+            await user.save();
+            res.json({ message: 'User marked as deleted' });
         } else {
             res.status(404).json({ message: 'User not found' });
         }

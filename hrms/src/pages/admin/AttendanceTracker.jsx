@@ -403,7 +403,9 @@ const AttendanceTracker = () => {
                                             <td className="px-6 py-4 font-medium">{record.date}</td>
                                             <td className="px-6 py-4">
                                                 <div className="flex flex-col">
-                                                    <span className="font-bold">{record.userId?.name || 'Unknown'}</span>
+                                                    <span className="font-bold">
+                                                        {record.userId?.name || 'Unknown'} {record.userId?.status === 'Deleted' && <span className="text-rose-500 text-xs ml-1">(Deleted Employee)</span>}
+                                                    </span>
                                                     <span className="text-xs text-muted-foreground">{record.userId?.employeeId}</span>
                                                 </div>
                                             </td>
@@ -452,9 +454,17 @@ const AttendanceTracker = () => {
             >
                 {selectedRecord && (
                     <div className="space-y-4">
-                        <div className="p-4 bg-muted/30 rounded-xl">
-                            <p className="text-xs font-bold uppercase text-muted-foreground">Employee</p>
-                            <p className="text-lg font-bold">{selectedRecord.userId?.name} ({selectedRecord.userId?.employeeId})</p>
+                        <div className="p-4 bg-muted/30 rounded-xl flex justify-between items-center">
+                            <div>
+                                <p className="text-xs font-bold uppercase text-muted-foreground">Employee</p>
+                                <p className="text-lg font-bold">{selectedRecord.userId?.name} {selectedRecord.userId?.status === 'Deleted' ? '(Deleted Employee)' : ''} ({selectedRecord.userId?.employeeId})</p>
+                            </div>
+                            {selectedRecord.userId?.status === 'Deleted' && (
+                                <div className="text-right">
+                                    <p className="text-xs font-bold uppercase text-muted-foreground">Employee Status</p>
+                                    <Badge variant="destructive">Deleted</Badge>
+                                </div>
+                            )}
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                             <div className="p-3 border rounded-lg">

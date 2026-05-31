@@ -239,12 +239,7 @@ const AdminDashboard = () => {
                     <p className="text-muted-foreground">Overview of your company's performance.</p>
                 </div>
                 <div className="flex items-center gap-2">
-                    <Button onClick={() => window.location.href='/admin/enroll-face'} variant="outline" className="shadow-sm">
-                        Enroll Employee Face
-                    </Button>
-                    <Badge variant={isOnBreak ? "warning" : (isCheckedIn ? "success" : "secondary")} className="text-sm py-1 px-3">
-                        My Status: {isOnBreak ? 'On Break' : (isCheckedIn ? 'Working' : (attendanceData?.checkOut ? 'Completed' : 'Offline'))}
-                    </Badge>
+
                 </div>
             </div>
 

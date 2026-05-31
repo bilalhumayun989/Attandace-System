@@ -453,7 +453,7 @@ const PayrollManagement = () => {
                                                     title="Click to view calculation breakdown"
                                                 >
                                                     <td className="p-4 align-middle font-medium">
-                                                        {payroll.userId?.name || 'Unknown'}
+                                                        {payroll.userId?.name || 'Unknown'} {payroll.userId?.status === 'Deleted' && <span className="text-rose-500 text-xs ml-1">(Deleted)</span>}
                                                         <div className="text-xs text-muted-foreground font-normal">{payroll.userId?.role}</div>
                                                     </td>
                                                     <td className="p-4 align-middle">
