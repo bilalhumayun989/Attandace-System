@@ -33,7 +33,7 @@ const createEmployee = async (req, res) => {
     try {
         // 1. Generate Employee ID
         let nextNumber = 1;
-        const lastEmpUser = await User.findOne({ adminId: req.adminId, employeeId: /^EMP-\d+$/ }).sort({ createdAt: -1 });
+        const lastEmpUser = await User.findOne({ employeeId: /^EMP-\d+$/ }).sort({ createdAt: -1 });
         if (lastEmpUser && lastEmpUser.employeeId) {
             const numPart = lastEmpUser.employeeId.split('-')[1];
             if (numPart && !isNaN(numPart)) {
@@ -42,7 +42,7 @@ const createEmployee = async (req, res) => {
         }
         const employeeId = `EMP-${nextNumber.toString().padStart(3, '0')}`;
 
-        const userExists = await User.findOne({ employeeId, adminId: req.adminId });
+        const userExists = await User.findOne({ employeeId });
         if (userExists) {
             // Unlikely to happen, but handled just in case
             return res.status(400).json({ message: 'Employee ID already exists. Please try again.' });
