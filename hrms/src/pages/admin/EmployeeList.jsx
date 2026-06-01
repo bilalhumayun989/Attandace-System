@@ -106,12 +106,12 @@ const EmployeeList = () => {
             const data = await response.json();
 
             if (response.ok) {
-                setMessage({ type: 'success', text: 'Employee created! Redirecting to Face Enrollment...' });
+                setMessage({ type: 'success', text: 'Employee created successfully!' });
                 fetchEmployees();
                 setTimeout(() => {
                     setIsAddModalOpen(false);
                     resetForm();
-                    navigate(`/admin/enroll-face?userId=${data._id}`);
+                    navigate('/admin/employees');
                 }, 1500);
             } else {
                 setMessage({ type: 'error', text: data.message || 'Failed to create employee' });
