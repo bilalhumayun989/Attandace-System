@@ -248,7 +248,7 @@ const EmployeeList = () => {
                             </thead>
                             <tbody className="divide-y divide-border/40 bg-card">
                                 {filteredEmployees.map((employee) => (
-                                    <tr key={employee._id} className="hover:bg-muted/30 transition-colors">
+                                    <tr key={employee._id} className={`hover:bg-muted/30 transition-colors ${employee.status === 'Deleted' ? 'line-through opacity-50 bg-muted/20' : ''}`}>
                                         <td className="p-4 align-middle">
                                             <div className="flex items-center gap-3">
                                                 <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-xs ring-2 ring-background">
@@ -285,23 +285,12 @@ const EmployeeList = () => {
                                         <td className="p-4 align-middle text-right">
                                             <div className="flex justify-end gap-2">
                                                 {can('employees', 'edit') && (
-                                                    <Button 
-                                                        variant="ghost" 
-                                                        size="icon" 
-                                                        className="h-8 w-8 text-emerald-600" 
-                                                        title="Enroll Face"
-                                                        onClick={() => navigate(`/admin/enroll-face?userId=${employee._id}`)}
-                                                    >
-                                                        <Camera className="h-4 w-4" />
-                                                    </Button>
-                                                )}
-                                                {can('employees', 'edit') && (
-                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-primary" onClick={() => handleEditClick(employee)}>
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-primary disabled:opacity-50" disabled={employee.status === 'Deleted'} onClick={() => handleEditClick(employee)}>
                                                         <Edit2 className="h-4 w-4" />
                                                     </Button>
                                                 )}
                                                 {can('employees', 'delete') && (
-                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDeleteEmployee(employee._id)}>
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive disabled:opacity-50" disabled={employee.status === 'Deleted'} onClick={() => handleDeleteEmployee(employee._id)}>
                                                         <Trash2 className="h-4 w-4" />
                                                     </Button>
                                                 )}

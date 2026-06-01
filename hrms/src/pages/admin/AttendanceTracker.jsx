@@ -399,12 +399,13 @@ const AttendanceTracker = () => {
                                     <tr><td colSpan="7" className="p-12 text-center text-muted-foreground">No matching records found.</td></tr>
                                 ) : (
                                     filteredAttendance.map((record) => (
-                                        <tr key={record._id} className="hover:bg-muted/30 transition-colors">
+                                        <tr key={record._id} className={`hover:bg-muted/30 transition-colors ${record.userId?.status === 'Deleted' ? 'line-through opacity-50 bg-muted/20' : ''}`}>
                                             <td className="px-6 py-4 font-medium">{record.date}</td>
                                             <td className="px-6 py-4">
                                                 <div className="flex flex-col">
-                                                    <span className="font-bold">
-                                                        {record.userId?.name || 'Unknown'} {record.userId?.status === 'Deleted' && <span className="text-rose-500 text-xs ml-1">(Deleted Employee)</span>}
+                                                    <span className="font-bold text-slate-900">
+                                                        {record.userId?.name || 'Unknown'}
+                                                        {record.userId?.status === 'Deleted' && <span className="text-rose-500 text-xs ml-2 font-semibold">(Deleted)</span>}
                                                     </span>
                                                     <span className="text-xs text-muted-foreground">{record.userId?.employeeId}</span>
                                                 </div>

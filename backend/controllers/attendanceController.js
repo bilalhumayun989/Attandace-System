@@ -108,6 +108,7 @@ const checkIn = async (req, res) => {
         const userId = req.user._id;
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
+        if (user.status === 'Deleted') return res.status(400).json({ message: 'Deleted users cannot mark attendance' });
 
         const pktNow = getPKTTime();
         const dateStr = getPKTDateString(pktNow);
@@ -173,6 +174,7 @@ const checkOut = async (req, res) => {
         // Determine shift duration and effective checkout
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
+        if (user.status === 'Deleted') return res.status(400).json({ message: 'Deleted users cannot mark attendance' });
 
         const checkInTime = new Date(attendance.checkIn);
         let effectiveCheckOut = pktNow;
@@ -395,6 +397,7 @@ const overtimeIn = async (req, res) => {
 
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
+        if (user.status === 'Deleted') return res.status(400).json({ message: 'Deleted users cannot mark attendance' });
 
 
 
@@ -482,6 +485,9 @@ const enrollFace = async (req, res) => {
         if (!user) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
+        if (user.status === 'Deleted') {
+            return res.status(400).json({ success: false, message: 'Deleted users cannot enroll faces' });
+        }
 
         user.faceDescriptors = descriptors;
         user.faceEnrolled = true;
@@ -515,6 +521,7 @@ const faceCheckIn = async (req, res) => {
         const { userId } = req.body;
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
+        if (user.status === 'Deleted') return res.status(400).json({ message: 'Deleted users cannot mark attendance' });
 
         const pktNow = getPKTTime(); // Use server time for security
         const dateStr = getPKTDateString(pktNow);

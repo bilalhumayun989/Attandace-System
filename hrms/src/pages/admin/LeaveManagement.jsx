@@ -415,13 +415,14 @@ const LeaveManagement = () => {
                                 </tr>
                             ) : (
                                 employees.map((emp) => (
-                                    <tr key={emp._id} className={`group hover:bg-primary/5 transition-all cursor-default ${selectedIds.includes(emp._id) ? 'bg-primary/5' : ''}`}>
+                                    <tr key={emp._id} className={`group hover:bg-primary/5 transition-all cursor-default ${selectedIds.includes(emp._id) ? 'bg-primary/5' : ''} ${emp.status === 'Deleted' ? 'line-through opacity-50 bg-muted/20' : ''}`}>
                                         <td className="px-6 py-4">
-                                            <input 
+                                                <input 
                                                 type="checkbox" 
                                                 checked={selectedIds.includes(emp._id)}
                                                 onChange={() => toggleSelect(emp._id)}
-                                                className="rounded border-border text-primary focus:ring-primary h-4 w-4"
+                                                disabled={emp.status === 'Deleted'}
+                                                className="rounded border-border text-primary focus:ring-primary h-4 w-4 disabled:opacity-50"
                                             />
                                         </td>
                                         <td className="px-6 py-4">

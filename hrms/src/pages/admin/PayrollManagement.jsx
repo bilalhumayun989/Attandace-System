@@ -448,7 +448,7 @@ const PayrollManagement = () => {
                                         filteredPayrolls.map((payroll) => (
                                             <React.Fragment key={payroll._id}>
                                                 <tr 
-                                                    className="hover:bg-muted/30 transition-colors cursor-pointer"
+                                                    className={`hover:bg-muted/30 transition-colors cursor-pointer ${payroll.userId?.status === 'Deleted' ? 'line-through opacity-50 bg-muted/20' : ''}`}
                                                     onClick={() => toggleExpand(payroll._id)}
                                                     title="Click to view calculation breakdown"
                                                 >

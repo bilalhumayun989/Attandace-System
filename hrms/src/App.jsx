@@ -24,7 +24,6 @@ import MyAttendance from './pages/employee/MyAttendance';
 import Profile from './pages/employee/Profile';
 
 import FaceKiosk from './pages/FaceKiosk';
-import FaceEnrollment from './pages/FaceEnrollment';
 
 
 
@@ -86,7 +85,6 @@ function App() {
                   </PermissionRoute>
                 } />
                 <Route path="settings" element={<AdminSettings />} />
-                <Route path="enroll-face" element={<FaceEnrollment />} />
 
               </Route>
             </Route>
