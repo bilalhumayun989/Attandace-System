@@ -14,28 +14,28 @@ export const AttendanceTable = ({
 }) => {
   if (loading) {
     return (
-      <tbody>
+      <>
         <tr>
           <td colSpan={7} className="p-12 text-center text-muted-foreground">
             <div className="mx-auto animate-spin mb-2">Loading...</div>
           </td>
         </tr>
-      </tbody>
-    );
+      </>
+    );    
   }
 
   if (filteredAttendance.length === 0) {
     return (
-      <tbody>
+      <>
         <tr>
           <td colSpan={7} className="p-12 text-center text-muted-foreground">No matching records found.</td>
         </tr>
-      </tbody>
+      </>
     );
   }
 
   return (
-    <tbody>
+    <>
       {filteredAttendance.map((record, index) => (
         <tr key={record._id || index} className={`hover:bg-muted/30 transition-colors ${record.userId?.status === 'Deleted' ? 'line-through opacity-50 bg-muted/20' : ''}`}>
           <td className="px-6 py-4 font-medium">{record.date}</td>
@@ -69,6 +69,6 @@ export const AttendanceTable = ({
           </td>
         </tr>
       ))}
-    </tbody>
+    </>
   );
 };
