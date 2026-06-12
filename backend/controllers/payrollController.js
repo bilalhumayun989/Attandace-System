@@ -1,7 +1,7 @@
 const Payroll = require('../models/Payroll');
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
-const { reconcileAttendance } = require('./attendanceController');
+const { reconcileAttendance, reconcileMultipleUsersAttendance } = require('./attendanceController');
 
 // @desc    Generate/Calculate Payroll for a specific month
 // @route   POST /api/payroll/generate
@@ -66,9 +66,10 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
     const endStr = `${endDate.getFullYear()}-${(endDate.getMonth() + 1).toString().padStart(2, '0')}-${endDate.getDate().toString().padStart(2, '0')}`;
     const totalDaysInCycle = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
 
+    // Reconcile attendance in bulk for all employees first
+    await reconcileMultipleUsersAttendance(employees);
+
     for (const user of employees) {
-        // Reconcile attendance first
-        await reconcileAttendance(user._id);
 
         // Fetch attendance records for the specific cycle range
         const attendanceRecords = await Attendance.find({

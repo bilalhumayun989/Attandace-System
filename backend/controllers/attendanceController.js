@@ -100,6 +100,73 @@ const reconcileAttendance = async (userId) => {
     }
 };
 
+// @desc    Reconcile missing attendance records for multiple users in bulk
+const reconcileMultipleUsersAttendance = async (users) => {
+    if (!users || users.length === 0) return;
+
+    const pktNow = getPKTTime();
+    const todayStr = getPKTDateString(pktNow);
+
+    const yesterday = new Date(pktNow);
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(0, 0, 0, 0);
+
+    const yesterdayStr = getPKTDateString(yesterday);
+
+    try {
+        const userIds = users.map(u => u._id);
+        const existingRecords = await Attendance.find({
+            userId: { $in: userIds },
+            date: { $lte: yesterdayStr }
+        }).select('userId date status isAutoLeave');
+
+        // Group by user ID
+        const recordsByUser = {};
+        for (const r of existingRecords) {
+            const uid = r.userId.toString();
+            if (!recordsByUser[uid]) recordsByUser[uid] = new Set();
+            recordsByUser[uid].add(r.date);
+        }
+
+        const newRecords = [];
+
+        for (const user of users) {
+            let current = new Date(user.joinDate || user.createdAt);
+            if (isNaN(current.getTime())) {
+                current = new Date(user.createdAt);
+            }
+
+            if (current > yesterday) continue;
+
+            const userOffDays = (user.offDays && user.offDays.length > 0) ? user.offDays : [5];
+            const userSet = recordsByUser[user._id.toString()] || new Set();
+
+            while (current <= yesterday) {
+                const dateStr = getPKTDateString(current);
+                const dayOfWeek = current.getDay();
+
+                if (!userSet.has(dateStr)) {
+                    if (!userOffDays.includes(dayOfWeek) && !(user.vacations && user.vacations.includes(dateStr))) {
+                        newRecords.push({
+                            userId: user._id,
+                            date: dateStr,
+                            status: 'Absent',
+                            adminId: user.adminId
+                        });
+                    }
+                }
+                current.setDate(current.getDate() + 1);
+            }
+        }
+
+        if (newRecords.length > 0) {
+            await Attendance.insertMany(newRecords);
+        }
+    } catch (error) {
+        console.error('Error in reconcileMultipleUsersAttendance:', error);
+    }
+};
+
 // @desc    Check In
 // @route   POST /api/attendance/checkin
 // @access  Private
@@ -302,11 +369,9 @@ const addCustomAttendance = async (req, res) => {
 // @access  Private/Admin
 const getAllAttendance = async (req, res) => {
     try {
-        // Trigger reconciliation for all staff before fetching
+        // Trigger reconciliation for all staff in bulk before fetching
         const users = await User.find({ role: { $ne: 'Admin' }, adminId: req.adminId });
-        for (const user of users) {
-            await reconcileAttendance(user._id);
-        }
+        await reconcileMultipleUsersAttendance(users);
 
         const attendance = await Attendance.find({ adminId: req.adminId })
             .populate('userId', 'name employeeId role department offDays')
@@ -589,6 +654,7 @@ const faceCheckIn = async (req, res) => {
 
 module.exports = {
     reconcileAttendance,
+    reconcileMultipleUsersAttendance,
     checkIn,
     checkOut,
     overtimeIn,
