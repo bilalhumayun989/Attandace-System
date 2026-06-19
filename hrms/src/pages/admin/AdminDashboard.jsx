@@ -231,6 +231,26 @@ const AdminDashboard = () => {
     const lastBreak = attendanceData?.breaks?.[attendanceData.breaks.length - 1];
     const isOnBreak = lastBreak && !lastBreak.end;
 
+    const handleDeleteAllFaces = async () => {
+        if (!window.confirm("CRITICAL WARNING: Are you sure you want to delete ALL face data for ALL employees? This action cannot be undone and will require everyone to re-enroll!")) return;
+        
+        try {
+            const response = await fetch(`${API_BASE_URL}/attendance/enroll-face-all`, {
+                method: 'DELETE',
+                headers: { 'X-Role-Context': 'Admin' },
+                credentials: 'include'
+            });
+            const data = await response.json();
+            if (response.ok) {
+                alert('Success: All face data has been completely removed.');
+            } else {
+                alert(`Error: ${data.message || 'Failed to delete all faces'}`);
+            }
+        } catch (error) {
+            alert('Error connecting to server');
+        }
+    };
+
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
             <div className="flex flex-col md:flex-row items-center justify-between gap-4">
@@ -238,9 +258,19 @@ const AdminDashboard = () => {
                     <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
                     <p className="text-muted-foreground">Overview of your company's performance.</p>
                 </div>
-                <div className="flex items-center gap-2">
+                {user?.role === 'SuperAdmin' && (
+                    <div className="flex items-center gap-2">
+                        <Button 
+                            variant="destructive" 
+                            onClick={handleDeleteAllFaces}
+                            className="bg-rose-600 hover:bg-rose-700 shadow-md"
+                        >
+                            <AlertCircle className="mr-2 h-4 w-4" />
+                            Remove All Faces
+                        </Button>
+                    </div>
+                )}
 
-                </div>
             </div>
 
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

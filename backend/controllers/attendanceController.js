@@ -652,6 +652,42 @@ const faceCheckIn = async (req, res) => {
     }
 };
 
+// @desc    Delete/Unenroll employee face
+// @route   DELETE /api/attendance/enroll-face/:userId
+// @access  Private/Admin
+const unenrollFace = async (req, res) => {
+    try {
+        const user = await User.findById(req.params.userId);
+        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+        user.faceDescriptors = [];
+        user.faceEnrolled = false;
+        await user.save();
+
+        res.json({ success: true, message: 'Face data deleted successfully' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    }
+};
+
+// @desc    Delete/Unenroll ALL employee faces
+// @route   DELETE /api/attendance/enroll-face
+// @access  Private/Admin
+const unenrollAllFaces = async (req, res) => {
+    try {
+        // Find all users who have faces enrolled and reset their fields
+        await User.updateMany(
+            { faceEnrolled: true },
+            { $set: { faceDescriptors: [], faceEnrolled: false } }
+        );
+
+        res.json({ success: true, message: 'All face data deleted successfully' });
+    } catch (error) {
+        console.error('Error deleting all faces:', error);
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    }
+};
+
 module.exports = {
     reconcileAttendance,
     reconcileMultipleUsersAttendance,
@@ -670,6 +706,8 @@ module.exports = {
     enrollFace,
     getFaceDescriptors,
     faceCheckIn,
-    addCustomAttendance
+    addCustomAttendance,
+    unenrollFace,
+    unenrollAllFaces
 };
 

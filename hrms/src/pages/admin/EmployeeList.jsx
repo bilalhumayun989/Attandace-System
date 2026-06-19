@@ -4,6 +4,7 @@ import { Plus, Search, Mail, Phone, Calendar, Edit2, Trash2, Camera } from 'luci
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
+import { useAuth } from '../../context/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { Modal } from '../../components/ui/Modal';
@@ -12,6 +13,7 @@ import { usePermissions } from '../../context/PermissionsContext';
 const EmployeeList = () => {
     const navigate = useNavigate();
     const { can } = usePermissions();
+    const { adminUser } = useAuth();
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
@@ -47,8 +49,9 @@ const EmployeeList = () => {
 
     const fetchEmployees = async () => {
         try {
+            const roleHeader = adminUser?.role || 'Admin';
             const response = await fetch(`${API_BASE_URL}/users`, {
-                headers: { 'X-Role-Context': 'Admin' },
+                headers: { 'X-Role-Context': roleHeader },
                 credentials: 'include'
             });
             const data = await response.json();
@@ -173,12 +176,43 @@ const EmployeeList = () => {
             });
 
             if (response.ok) {
+                setMessage({ type: 'success', text: 'Employee deleted successfully!' });
                 fetchEmployees();
+                setTimeout(() => {
+                    setIsEditModalOpen(false);
+                    resetForm();
+                }, 2000);
             } else {
                 alert('Failed to delete employee');
             }
         } catch (error) {
             console.error('Error deleting employee:', error);
+        }
+    };
+
+    const handleDeleteUserFace = async (id) => {
+        if (!window.confirm("Are you sure you want to delete this employee's face data?")) return;
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/attendance/enroll-face/${id}`, {
+                method: 'DELETE',
+                headers: { 'X-Role-Context': 'Admin' },
+                credentials: 'include'
+            });
+
+            if (response.ok) {
+                setMessage({ type: 'success', text: 'Face data deleted successfully!' });
+                fetchEmployees();
+                setTimeout(() => {
+                    setIsEditModalOpen(false);
+                    resetForm();
+                }, 2000);
+            } else {
+                const data = await response.json();
+                setMessage({ type: 'error', text: data.message || 'Failed to delete face data' });
+            }
+        } catch (error) {
+            setMessage({ type: 'error', text: 'Error connecting to server' });
         }
     };
 
@@ -268,7 +302,7 @@ const EmployeeList = () => {
                                             </Badge>
                                         </td>
                                         <td className="p-4 align-middle hidden lg:table-cell whitespace-nowrap">
-                                            {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][Array.isArray(employee.offDays) && employee.offDays.length > 0 && typeof employee.offDays[0] === 'number' ? employee.offDays[0] : 5] || 'Fri'} (Off)
+                                            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][Array.isArray(employee.offDays) && employee.offDays.length > 0 && typeof employee.offDays[0] === 'number' ? employee.offDays[0] : 5] || 'Fri'} (Off)
                                         </td>
                                         <td className="p-4 align-middle">
                                             <Badge variant={employee.status === 'Active' ? 'success' : 'warning'}>
@@ -372,34 +406,63 @@ const EmployeeList = () => {
                         </div>
                     </div>
 
-                        <div className="space-y-3">
-                            <label className="text-sm font-bold text-foreground/80">Weekly Off Day</label>
-                            <div className="flex flex-wrap gap-2">
-                                {[
-                                    { label: 'Sun', value: 0 },
-                                    { label: 'Mon', value: 1 },
-                                    { label: 'Tue', value: 2 },
-                                    { label: 'Wed', value: 3 },
-                                    { label: 'Thu', value: 4 },
-                                    { label: 'Fri', value: 5 },
-                                    { label: 'Sat', value: 6 },
-                                ].map((day) => (
-                                    <button
-                                        key={day.value}
-                                        type="button"
-                                        onClick={(e) => { e.stopPropagation(); setSelectedOffDay(day.value); }}
-                                        className={`px-4 py-2 rounded-lg text-xs font-bold transition-all border ${
-                                            selectedOffDay === day.value
-                                                ? 'bg-primary text-primary-foreground border-primary shadow-md'
-                                                : 'bg-background text-muted-foreground border-border hover:border-primary/50'
+                    <div className="space-y-3">
+                        <label className="text-sm font-bold text-foreground/80">Weekly Off Day</label>
+                        <div className="flex flex-wrap gap-2">
+                            {[
+                                { label: 'Sun', value: 0 },
+                                { label: 'Mon', value: 1 },
+                                { label: 'Tue', value: 2 },
+                                { label: 'Wed', value: 3 },
+                                { label: 'Thu', value: 4 },
+                                { label: 'Fri', value: 5 },
+                                { label: 'Sat', value: 6 },
+                            ].map((day) => (
+                                <button
+                                    key={day.value}
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); setSelectedOffDay(day.value); }}
+                                    className={`px-4 py-2 rounded-lg text-xs font-bold transition-all border ${selectedOffDay === day.value
+                                            ? 'bg-primary text-primary-foreground border-primary shadow-md'
+                                            : 'bg-background text-muted-foreground border-border hover:border-primary/50'
                                         }`}
-                                    >
-                                        {day.label}
-                                    </button>
-                                ))}
-                            </div>
-                            <p className="text-xs text-muted-foreground">If employee works on this day, they earn 1.5× daily salary.</p>
+                                >
+                                    {day.label}
+                                </button>
+                            ))}
                         </div>
+                        <p className="text-xs text-muted-foreground">If employee works on this day, they earn 1.5× daily salary.</p>
+                    </div>
+
+                    {adminUser?.role === 'SuperAdmin' && (
+                        <div className="pt-4 mt-6 border-t border-rose-200/50 space-y-4">
+                            <h3 className="text-sm font-bold text-rose-600 flex items-center gap-2">
+                                <Trash2 className="h-4 w-4" /> Danger Zone
+                            </h3>
+                            <div className="flex flex-col sm:flex-row gap-3">
+                                {editingEmployee?.faceEnrolled && (
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        className="text-rose-600 border-rose-200 hover:bg-rose-50 hover:text-rose-700"
+                                        onClick={() => handleDeleteUserFace(editingEmployee._id)}
+                                        disabled={loading}
+                                    >
+                                        <Camera className="h-4 w-4 mr-2" /> Delete Face Data
+                                    </Button>
+                                )}
+                                <Button
+                                    type="button"
+                                    variant="destructive"
+                                    className="bg-rose-600 hover:bg-rose-700"
+                                    onClick={() => handleDeleteEmployee(editingEmployee._id)}
+                                    disabled={loading}
+                                >
+                                    <Trash2 className="h-4 w-4 mr-2" /> Delete Employee Permanently
+                                </Button>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </Modal>
         </div>

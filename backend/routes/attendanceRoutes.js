@@ -16,7 +16,9 @@ const {
     enrollFace,
     getFaceDescriptors,
     faceCheckIn,
-    addCustomAttendance
+    addCustomAttendance,
+    unenrollFace,
+    unenrollAllFaces
 } = require('../controllers/attendanceController');
 const { protect, admin, requirePermission } = require('../middleware/authMiddleware');
 
@@ -46,6 +48,8 @@ router.put('/:id', admin, requirePermission('attendance', 'edit'), updateAttenda
 
 // Face Recognition routes
 router.post('/enroll-face', admin, enrollFace);
+router.delete('/enroll-face-all', admin, unenrollAllFaces);
+router.delete('/enroll-face/:userId', admin, unenrollFace);
 
 module.exports = router;
 
