@@ -110,24 +110,13 @@ const AdminLayout = () => {
                     {/* Topbar */}
                     <header className="h-16 border-b border-border bg-background/50 backdrop-blur-md flex items-center justify-between px-4 sm:px-6 sticky top-0 z-10 w-full">
                         <div className="w-full flex items-center justify-between">
-                            <div className="flex items-center gap-4 w-1/2 sm:w-1/3">
+                            <div className="flex items-center gap-4">
                                 <Button variant="ghost" size="icon" className="lg:hidden -ml-2" onClick={() => setIsSidebarOpen(true)}>
                                     <Menu size={20} />
                                 </Button>
-                                <div className="relative w-full max-w-sm hidden sm:block">
-                                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                                    <Input
-                                        placeholder="Search everything..."
-                                        className="pl-10 bg-muted/50 border-transparent focus:bg-background focus:border-input h-10 rounded-xl text-foreground placeholder:text-muted-foreground transition-all"
-                                    />
-                                </div>
                             </div>
 
                             <div className="flex items-center gap-4">
-                                <Button variant="ghost" size="icon" className="relative text-muted-foreground hover:text-foreground rounded-full">
-                                    <Bell size={20} />
-                                    <span className="absolute top-2 right-2.5 h-2 w-2 bg-destructive rounded-full" />
-                                </Button>
                                 <div className="h-9 w-9 rounded-full bg-gradient-to-tr from-primary to-accent p-[2px]">
                                     <div className="h-full w-full rounded-full bg-card overflow-hidden">
                                         <img src={`https://ui-avatars.com/api/?name=${user?.name || 'Admin'}&background=random`} alt="Admin" className="h-full w-full object-cover" />

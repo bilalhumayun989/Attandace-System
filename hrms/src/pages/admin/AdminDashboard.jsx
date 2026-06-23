@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Users, Clock, AlertCircle, FileText, Loader2, Calendar, CheckCircle, Coffee, XCircle } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Users, Clock, AlertCircle, FileText, Loader2, Calendar, CheckCircle, Coffee, XCircle, LogIn } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
@@ -27,9 +27,10 @@ const AdminDashboard = () => {
     const { adminUser: user } = useAuth();
     const [stats, setStats] = useState({
         totalEmployees: 0,
-        attendanceToday: 0,
-        lateArrivals: 0,
+        checkInsToday: 0,
+        completedCheckouts: 0,
     });
+    const pollingRef = useRef(null);
     const [recentActivity, setRecentActivity] = useState([]);
     const [chartData, setChartData] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -78,18 +79,16 @@ const AdminDashboard = () => {
             const employeesList = Array.isArray(users) ? users : [];
             const totalEmployees = employeesList.length;
 
-            // 2. Process Today's Attendance & Late Arrivals
+            // 2. Process Today's Attendance
             const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
             const todaysAttendance = Array.isArray(attendance) ? attendance.filter(a => a.date === today) : [];
-            const checkedInToday = todaysAttendance.filter(a => a.checkIn).length;
-            const lateArrivals = todaysAttendance.filter(a => a.status === 'Late').length;
-
-
+            const checkInsToday = todaysAttendance.filter(a => a.checkIn).length;
+            const completedCheckouts = todaysAttendance.filter(a => a.checkOut).length;
 
             setStats({
                 totalEmployees,
-                attendanceToday: checkedInToday,
-                lateArrivals,
+                checkInsToday,
+                completedCheckouts,
             });
 
             // 4. Admin self-attendance status
@@ -176,6 +175,11 @@ const AdminDashboard = () => {
 
     useEffect(() => {
         fetchDashboardData();
+        // Real-time polling every 30 seconds
+        pollingRef.current = setInterval(() => {
+            fetchDashboardData();
+        }, 30000);
+        return () => clearInterval(pollingRef.current);
     }, []);
 
     // Timer Logic
@@ -273,7 +277,7 @@ const AdminDashboard = () => {
 
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                 <StatCard
                     title="Total Employees"
                     value={stats.totalEmployees.toString()}
@@ -282,19 +286,13 @@ const AdminDashboard = () => {
                 />
                 <StatCard
                     title="Attendance Today"
-                    value={stats.attendanceToday.toString()}
-                    description="checked in today"
-                    icon={Clock}
-                />
-                <StatCard
-                    title="Late Arrivals"
-                    value={stats.lateArrivals.toString()}
-                    description="arrived late today"
-                    icon={AlertCircle}
+                    value={stats.checkInsToday.toString()}
+                    description="employees checked in today"
+                    icon={LogIn}
                 />
                 <StatCard
                     title="Completed Checkouts"
-                    value={Array.isArray(recentActivity) ? recentActivity.filter(a => a.checkOut).length.toString() : "0"}
+                    value={stats.completedCheckouts.toString()}
                     description="employees finished today"
                     icon={CheckCircle}
                 />

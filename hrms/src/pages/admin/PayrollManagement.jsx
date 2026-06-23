@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Ca
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Badge } from '../../components/ui/Badge';
-import { Loader2, DollarSign, Calendar, Download, Trash2, Settings2, ChevronDown, ChevronUp, User } from 'lucide-react';
+import { Loader2, DollarSign, Calendar, Download, Trash2, Settings2, ChevronDown, ChevronUp, User, Search } from 'lucide-react';
 import { usePermissions } from '../../context/PermissionsContext';
 
 const PayrollManagement = () => {
@@ -16,6 +16,7 @@ const PayrollManagement = () => {
     const [customEnd, setCustomEnd] = useState('');
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [showDailyBreakdownId, setShowDailyBreakdownId] = useState(null);
+    const [searchTerm, setSearchTerm] = useState('');
     const { can } = usePermissions();
 
     // Default to current month YYYY-MM
@@ -217,9 +218,19 @@ const PayrollManagement = () => {
     };
 
     const filteredPayrolls = payrolls.filter(p => {
-        const matchEmployee = selectedEmployeeId === 'All' || p.userId?._id === selectedEmployeeId;
-        const matchDepartment = selectedDepartment === 'All' || p.userId?.department === selectedDepartment;
-        return matchEmployee && matchDepartment;
+        const emp = p.userId;
+        const matchEmployee = selectedEmployeeId === 'All' || emp?._id === selectedEmployeeId;
+        const matchDepartment = selectedDepartment === 'All' || emp?.department === selectedDepartment;
+        
+        let matchSearch = true;
+        if (searchTerm) {
+            const term = searchTerm.toLowerCase();
+            const nameMatch = emp?.name?.toLowerCase().includes(term);
+            const idMatch = emp?.employeeId?.toLowerCase().includes(term);
+            matchSearch = nameMatch || idMatch;
+        }
+
+        return matchEmployee && matchDepartment && matchSearch;
     });
 
     const toggleExpand = (id) => {
@@ -239,63 +250,14 @@ const PayrollManagement = () => {
                     <p className="text-slate-500 font-medium">Manage monthly salaries, attendance reconciliation, and automated deductions.</p>
                 </div>
 
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto p-2">
-                    {/* Period */}
-                    <div className="flex items-center gap-3 px-3 py-2 border-b sm:border-b-0 sm:border-r border-slate-100 hover:bg-slate-50/50 transition-colors">
-                        <div className="bg-blue-50 p-2 rounded-lg">
-                            <Calendar className="h-4 w-4 text-blue-600" />
-                        </div>
-                        <div className="flex flex-col">
-                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Period</span>
-                            <Input
-                                type="month"
-                                value={selectedMonth}
-                                onChange={(e) => setSelectedMonth(e.target.value)}
-                                className="h-7 border-none bg-transparent p-0 focus-visible:ring-0 font-bold text-slate-700 text-sm shadow-none w-full"
-                            />
-                        </div>
-                    </div>
-
-                    {/* Department */}
-                    <div className="flex items-center gap-3 px-3 py-2 border-b sm:border-b-0 sm:border-r border-slate-100 hover:bg-slate-50/50 transition-colors">
-                        <div className="bg-purple-50 p-2 rounded-lg">
-                            <Settings2 className="h-4 w-4 text-purple-600" />
-                        </div>
-                        <div className="flex flex-col flex-1">
-                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Department</span>
-                            <select
-                                value={selectedDepartment}
-                                onChange={(e) => setSelectedDepartment(e.target.value)}
-                                className="bg-transparent border-none focus:ring-0 text-sm font-bold text-slate-700 cursor-pointer w-full h-7"
-                            >
-                                <option value="All">All Departments</option>
-                                {departments.map(dept => (
-                                    <option key={dept} value={dept}>{dept}</option>
-                                ))}
-                            </select>
-                        </div>
-                    </div>
-
-                    {/* Employee Filter */}
-                    <div className="flex items-center gap-3 px-3 py-2 hover:bg-slate-50/50 transition-colors">
-                        <div className="bg-emerald-50 p-2 rounded-lg">
-                            <User className="h-4 w-4 text-emerald-600" />
-                        </div>
-                        <div className="flex flex-col flex-1">
-                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Employee Filter</span>
-                            <select
-                                value={selectedEmployeeId}
-                                onChange={(e) => setSelectedEmployeeId(e.target.value)}
-                                className="bg-transparent border-none focus:ring-0 text-sm font-bold text-slate-700 cursor-pointer w-full h-7"
-                            >
-                                <option value="All">All Staff Members</option>
-                                {employees
-                                    .filter(emp => selectedDepartment === 'All' || emp.department === selectedDepartment)
-                                    .map(emp => (
-                                        <option key={emp._id} value={emp._id}>{emp.name} {emp.employeeId ? `(${emp.employeeId})` : ''}</option>
-                                    ))}
-                            </select>
-                        </div>
+                <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex bg-muted/50 p-1 rounded-xl border border-border/40 items-center">
+                        <Input
+                            type="month"
+                            value={selectedMonth}
+                            onChange={(e) => setSelectedMonth(e.target.value)}
+                            className="bg-transparent text-sm font-semibold px-3 py-1.5 focus:outline-none border-none h-auto w-auto cursor-pointer shadow-none focus-visible:ring-0"
+                        />
                     </div>
                 </div>
             </div>
@@ -406,6 +368,47 @@ const PayrollManagement = () => {
                     </div>
                 </div>
             )}
+
+            {/* Filter Bar */}
+            <Card className="border border-border/40 shadow-sm overflow-hidden mb-4">
+                <div className="p-4">
+                    <div className="flex flex-col md:flex-row items-center gap-4">
+                        <div className="relative flex-1 w-full">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                            <Input
+                                placeholder="Search by name or ID..."
+                                className="pl-9 h-10 w-full shadow-sm"
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                            />
+                        </div>
+                        <div className="flex gap-2 w-full md:w-auto">
+                            <select
+                                className="h-10 w-full md:w-48 rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:ring-1 focus:ring-primary"
+                                value={selectedEmployeeId}
+                                onChange={(e) => setSelectedEmployeeId(e.target.value)}
+                            >
+                                <option value="All">All Employees</option>
+                                {employees
+                                    .filter(emp => selectedDepartment === 'All' || emp.department === selectedDepartment)
+                                    .map(emp => (
+                                    <option key={emp._id} value={emp._id}>{emp.name}{emp.employeeId ? ` (${emp.employeeId})` : ''}</option>
+                                ))}
+                            </select>
+                            <select
+                                className="h-10 w-full md:w-48 rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:ring-1 focus:ring-primary"
+                                value={selectedDepartment}
+                                onChange={(e) => setSelectedDepartment(e.target.value)}
+                            >
+                                <option value="All">All Departments</option>
+                                {departments.map(dept => (
+                                    <option key={dept} value={dept}>{dept}</option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </Card>
 
             <Card className="border-muted/40 shadow-sm">
                 <CardHeader className="pb-3">

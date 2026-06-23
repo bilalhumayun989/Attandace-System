@@ -5,7 +5,7 @@ import { AttendanceTable } from './AttendanceTable';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
-import { Search, Filter, Download, Calendar as CalendarIcon, Info, ChevronLeft, ChevronRight, User as UserIcon, Zap, Mail } from 'lucide-react';
+import { Search, Filter, Download, Calendar as CalendarIcon, Info, ChevronLeft, ChevronRight, ChevronDown, User as UserIcon, Zap, Mail } from 'lucide-react';
 import { Modal } from '../../components/ui/Modal';
 import { usePermissions } from '../../context/PermissionsContext';
 
@@ -41,10 +41,14 @@ const AttendanceTracker = () => {
     const [allEmployees, setAllEmployees] = useState([]);
     const { can } = usePermissions();
 
-    // Month/Year Filtering
+    // Date Filtering
     const now = new Date();
+    const [filterDay, setFilterDay] = useState(String(now.getDate()).padStart(2, '0'));
+    const [isDayOpen, setIsDayOpen] = useState(false);
     const [filterMonth, setFilterMonth] = useState(String(now.getMonth() + 1).padStart(2, '0'));
+    const [isMonthOpen, setIsMonthOpen] = useState(false);
     const [filterYear, setFilterYear] = useState(String(now.getFullYear()));
+    const [isYearOpen, setIsYearOpen] = useState(false);
 
     useEffect(() => {
         fetchAttendance();
@@ -107,8 +111,11 @@ const AttendanceTracker = () => {
     // Filter Logic
     const filteredAttendance = useMemo(() => {
         return attendanceData.filter(r => {
-            const [year, month] = r.date.split('-');
-            const matchesDate = year === filterYear && month === filterMonth;
+            const [year, month, day] = r.date.split('-');
+            const matchesYear = year === filterYear;
+            const matchesMonth = filterMonth === 'All' || month === filterMonth;
+            const matchesDay = filterDay === 'All' || day === filterDay;
+            const matchesDate = matchesYear && matchesMonth && matchesDay;
             const matchesSearch = (r.userId?.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
                                  (r.userId?.employeeId || '').toLowerCase().includes(searchTerm.toLowerCase());
             const matchesStatus = statusFilter === 'All' || r.status === statusFilter;
@@ -116,7 +123,7 @@ const AttendanceTracker = () => {
             
             return matchesDate && matchesSearch && matchesStatus && matchesEmployee;
         });
-    }, [attendanceData, filterYear, filterMonth, searchTerm, statusFilter, selectedEmployeeId]);
+    }, [attendanceData, filterYear, filterMonth, filterDay, searchTerm, statusFilter, selectedEmployeeId]);
 
     const stats = useMemo(() => {
         const onTime = filteredAttendance.filter(r => r.status === 'Present').length;
@@ -254,10 +261,16 @@ const AttendanceTracker = () => {
     };
 
     const months = [
+        { val: 'All', label: 'All Months' },
         { val: '01', label: 'January' }, { val: '02', label: 'February' }, { val: '03', label: 'March' },
         { val: '04', label: 'April' }, { val: '05', label: 'May' }, { val: '06', label: 'June' },
         { val: '07', label: 'July' }, { val: '08', label: 'August' }, { val: '09', label: 'September' },
         { val: '10', label: 'October' }, { val: '11', label: 'November' }, { val: '12', label: 'December' }
+    ];
+
+    const days = [
+        { val: 'All', label: 'All' },
+        ...Array.from({ length: 31 }, (_, i) => ({ val: String(i + 1).padStart(2, '0'), label: String(i + 1) }))
     ];
 
     const currentYear = new Date().getFullYear();
@@ -272,21 +285,112 @@ const AttendanceTracker = () => {
                     <p className="text-muted-foreground mt-1">Export and manage monthly attendance reports.</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
-                    <div className="flex bg-muted/50 p-1 rounded-xl border border-border/40">
-                        <select
-                            className="bg-transparent text-sm font-semibold px-3 py-1.5 focus:outline-none cursor-pointer"
-                            value={filterMonth}
-                            onChange={(e) => setFilterMonth(e.target.value)}
-                        >
-                            {months.map(m => <option key={m.val} value={m.val}>{m.label}</option>)}
-                        </select>
-                        <select
-                            className="bg-transparent text-sm font-semibold px-3 py-1.5 focus:outline-none border-l border-border/40 cursor-pointer"
-                            value={filterYear}
-                            onChange={(e) => setFilterYear(e.target.value)}
-                        >
-                            {years.map(y => <option key={y} value={y}>{y}</option>)}
-                        </select>
+                    <div className="flex bg-muted/50 p-1 rounded-xl border border-border/40 items-center">
+                        {/* Custom Day Dropdown with Restricted Height */}
+                        <div className="relative">
+                            <div 
+                                className="flex items-center justify-between text-sm font-semibold px-3 py-1.5 cursor-pointer min-w-[4rem]"
+                                onClick={() => setIsDayOpen(!isDayOpen)}
+                            >
+                                <span>{days.find(d => d.val === filterDay)?.label || filterDay}</span>
+                                <ChevronDown className="ml-1 h-4 w-4 opacity-50" />
+                            </div>
+                            
+                            {isDayOpen && (
+                                <>
+                                    <div 
+                                        className="fixed inset-0 z-40" 
+                                        onClick={() => setIsDayOpen(false)}
+                                    />
+                                    <div className="absolute top-full left-0 mt-1 w-24 max-h-56 overflow-y-auto bg-background border border-border/40 rounded-xl shadow-xl z-50 py-1">
+                                        {days.map(d => (
+                                            <div 
+                                                key={d.val} 
+                                                className={`px-3 py-1.5 text-sm cursor-pointer hover:bg-muted ${filterDay === d.val ? 'bg-primary/10 text-primary font-bold' : ''}`}
+                                                onClick={() => {
+                                                    setFilterDay(d.val);
+                                                    setIsDayOpen(false);
+                                                }}
+                                            >
+                                                {d.label}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </>
+                            )}
+                        </div>
+
+                        <div className="h-4 border-l border-border/40 mx-1"></div>
+
+                        {/* Custom Month Dropdown */}
+                        <div className="relative">
+                            <div 
+                                className="flex items-center justify-between text-sm font-semibold px-3 py-1.5 cursor-pointer min-w-[7rem]"
+                                onClick={() => setIsMonthOpen(!isMonthOpen)}
+                            >
+                                <span>{months.find(m => m.val === filterMonth)?.label || filterMonth}</span>
+                                <ChevronDown className="ml-1 h-4 w-4 opacity-50" />
+                            </div>
+                            
+                            {isMonthOpen && (
+                                <>
+                                    <div 
+                                        className="fixed inset-0 z-40" 
+                                        onClick={() => setIsMonthOpen(false)}
+                                    />
+                                    <div className="absolute top-full left-0 mt-1 w-32 max-h-56 overflow-y-auto bg-background border border-border/40 rounded-xl shadow-xl z-50 py-1">
+                                        {months.map(m => (
+                                            <div 
+                                                key={m.val} 
+                                                className={`px-3 py-1.5 text-sm cursor-pointer hover:bg-muted ${filterMonth === m.val ? 'bg-primary/10 text-primary font-bold' : ''}`}
+                                                onClick={() => {
+                                                    setFilterMonth(m.val);
+                                                    setIsMonthOpen(false);
+                                                }}
+                                            >
+                                                {m.label}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </>
+                            )}
+                        </div>
+
+                        <div className="h-4 border-l border-border/40 mx-1"></div>
+
+                        {/* Custom Year Dropdown */}
+                        <div className="relative">
+                            <div 
+                                className="flex items-center justify-between text-sm font-semibold px-3 py-1.5 cursor-pointer min-w-[4rem]"
+                                onClick={() => setIsYearOpen(!isYearOpen)}
+                            >
+                                <span>{years.find(y => String(y) === String(filterYear)) || filterYear}</span>
+                                <ChevronDown className="ml-1 h-4 w-4 opacity-50" />
+                            </div>
+                            
+                            {isYearOpen && (
+                                <>
+                                    <div 
+                                        className="fixed inset-0 z-40" 
+                                        onClick={() => setIsYearOpen(false)}
+                                    />
+                                    <div className="absolute top-full left-0 mt-1 w-24 max-h-56 overflow-y-auto bg-background border border-border/40 rounded-xl shadow-xl z-50 py-1">
+                                        {years.map(y => (
+                                            <div 
+                                                key={y} 
+                                                className={`px-3 py-1.5 text-sm cursor-pointer hover:bg-muted ${String(filterYear) === String(y) ? 'bg-primary/10 text-primary font-bold' : ''}`}
+                                                onClick={() => {
+                                                    setFilterYear(String(y));
+                                                    setIsYearOpen(false);
+                                                }}
+                                            >
+                                                {y}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </>
+                            )}
+                        </div>
                     </div>
                     <Button 
                         onClick={() => setIsCustomModalOpen(true)}
@@ -340,41 +444,43 @@ const AttendanceTracker = () => {
             </div>
 
             {/* Filter Bar */}
-            <Card className="border border-border/40 shadow-sm">
-                <CardContent className="p-4 flex flex-col md:flex-row gap-4">
-                    <div className="relative flex-1">
-                        <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            placeholder="Search by name or ID..."
-                            className="pl-9 h-10"
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                        />
+            <Card className="border border-border/40 shadow-sm overflow-hidden">
+                <div className="p-4">
+                    <div className="flex flex-col md:flex-row items-center gap-4">
+                        <div className="relative flex-1 w-full">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                            <Input
+                                placeholder="Search by name or ID..."
+                                className="pl-9 h-10 w-full shadow-sm"
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                            />
+                        </div>
+                        <div className="flex gap-2 w-full md:w-auto">
+                            <select
+                                className="h-10 w-full md:w-48 rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:ring-1 focus:ring-primary"
+                                value={selectedEmployeeId}
+                                onChange={(e) => setSelectedEmployeeId(e.target.value)}
+                            >
+                                <option value="All">All Employees</option>
+                                {employees.map(emp => (
+                                    <option key={emp._id} value={emp._id}>{emp.name}{emp.employeeId ? ` (${emp.employeeId})` : ''}</option>
+                                ))}
+                            </select>
+                            <select
+                                className="h-10 w-full md:w-36 rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:ring-1 focus:ring-primary"
+                                value={statusFilter}
+                                onChange={(e) => setStatusFilter(e.target.value)}
+                            >
+                                <option value="All">All Status</option>
+                                <option value="Present">Present</option>
+                                <option value="Late">Late</option>
+                                <option value="Short Hours">Short Hours</option>
+                                <option value="Absent">Absent</option>
+                            </select>
+                        </div>
                     </div>
-                    <div className="flex gap-2">
-                        <select
-                            className="h-10 w-full md:w-48 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus:ring-1 focus:ring-primary"
-                            value={selectedEmployeeId}
-                            onChange={(e) => setSelectedEmployeeId(e.target.value)}
-                        >
-                            <option value="All">All Employees</option>
-                            {employees.map(emp => (
-                                <option key={emp._id} value={emp._id}>{emp.name}{emp.employeeId ? ` (${emp.employeeId})` : ''}</option>
-                            ))}
-                        </select>
-                        <select
-                            className="h-10 w-full md:w-36 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus:ring-1 focus:ring-primary"
-                            value={statusFilter}
-                            onChange={(e) => setStatusFilter(e.target.value)}
-                        >
-                            <option value="All">All Status</option>
-                            <option value="Present">Present</option>
-                            <option value="Late">Late</option>
-                            <option value="Short Hours">Short Hours</option>
-                            <option value="Absent">Absent</option>
-                        </select>
-                    </div>
-                </CardContent>
+                </div>
             </Card>
 
             {/* Main Table */}

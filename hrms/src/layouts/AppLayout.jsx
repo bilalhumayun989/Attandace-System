@@ -102,17 +102,9 @@ const AppLayout = () => {
                             </Button>
                             <span className="font-bold text-lg">Attendance Manager</span>
                         </div>
-                        <Button variant="ghost" size="icon" className="relative text-muted-foreground hover:text-foreground rounded-full">
-                            <Bell size={20} />
-                            <span className="absolute top-2 right-2.5 h-2 w-2 bg-destructive rounded-full" />
-                        </Button>
                     </header>
 
                     <header className="hidden lg:flex h-16 border-b border-border bg-background/50 backdrop-blur-md items-center justify-end px-6 sticky top-0 z-10 w-full">
-                        <Button variant="ghost" size="icon" className="relative text-muted-foreground hover:text-foreground rounded-full">
-                            <Bell size={20} />
-                            <span className="absolute top-2 right-2.5 h-2 w-2 bg-destructive rounded-full" />
-                        </Button>
                     </header>
 
                     <main className="flex-1 overflow-y-auto p-4 sm:p-6 scroll-smooth">
