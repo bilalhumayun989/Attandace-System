@@ -19,7 +19,7 @@ export const PermissionsProvider = ({ children }) => {
     let isOwner = false;
 
     if (adminUser) {
-        if (adminUser.role === 'Admin') {
+        if (adminUser.role === 'Admin' || adminUser.role === 'SuperAdmin') {
             permissions = adminUser.permissions || ALL_PERMISSIONS;
             isOwner = true;
         } else {

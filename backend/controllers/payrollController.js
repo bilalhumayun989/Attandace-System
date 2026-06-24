@@ -10,7 +10,7 @@ const { reconcileAttendance, reconcileMultipleUsersAttendance } = require('./att
 const generatePayrollService = async (adminId, month, cycle, customStart, customEnd) => {
     if (!month && !customStart) throw new Error('Month or Custom Date Range is required');
 
-    const query = { role: { $ne: 'Admin' }, adminId: adminId };
+    const query = { role: { $nin: ['Admin', 'SuperAdmin'] }, adminId: adminId };
 
     const employees = await User.find(query);
     const payrolls = [];

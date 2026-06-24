@@ -42,7 +42,7 @@ export const AuthProvider = ({ children }) => {
     }, []);
 
     const login = (userData, contextRole) => {
-        if (contextRole === 'admin' || userData.role === 'Admin') {
+        if (contextRole === 'admin' || userData.role === 'Admin' || userData.role === 'SuperAdmin') {
             setAdminUser(userData);
             setEmployeeUser(null);
         } else {
@@ -83,4 +83,3 @@ export const AuthProvider = ({ children }) => {
 };
 
 export const useAuth = () => useContext(AuthContext);
-

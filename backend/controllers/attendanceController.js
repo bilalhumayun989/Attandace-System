@@ -400,7 +400,7 @@ const addCustomAttendance = async (req, res) => {
 const getAllAttendance = async (req, res) => {
     try {
         // Trigger reconciliation for all staff in bulk before fetching
-        const users = await User.find({ role: { $ne: 'Admin' }, adminId: req.adminId });
+        const users = await User.find({ role: { $nin: ['Admin', 'SuperAdmin'] }, adminId: req.adminId });
         await reconcileMultipleUsersAttendance(users);
 
         const attendance = await Attendance.find({ adminId: req.adminId })

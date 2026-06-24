@@ -19,7 +19,7 @@ const protect = async (req, res, next) => {
         token = req.headers.authorization.split(' ')[1];
     } 
     // 2. Check cookies (Standard for browsers)
-    else if (roleContext === 'Admin' && req.cookies.jwt_admin) {
+    else if ((roleContext === 'Admin' || roleContext === 'SuperAdmin') && req.cookies.jwt_admin) {
         token = req.cookies.jwt_admin;
     } else if (roleContext === 'Employee' && req.cookies.jwt_employee) {
         token = req.cookies.jwt_employee;
@@ -35,7 +35,7 @@ const protect = async (req, res, next) => {
 
             // Attach permissions to req.user
             if (req.user) {
-                if (req.user.role === 'Admin') {
+                if (req.user.role === 'Admin' || req.user.role === 'SuperAdmin') {
                     // Admin gets all permissions
                     req.user.permissions = ALL_PERMISSIONS;
                 } else {
@@ -44,7 +44,7 @@ const protect = async (req, res, next) => {
                 }
 
                 // TENANCY: Attach scoped adminId to the request for easy filtering
-                req.adminId = req.user.role === 'Admin' ? req.user._id : req.user.adminId;
+                req.adminId = (req.user.role === 'Admin' || req.user.role === 'SuperAdmin') ? req.user._id : req.user.adminId;
             }
 
             next();
@@ -62,7 +62,7 @@ const admin = (req, res, next) => {
         return res.status(401).json({ message: 'Not authorized' });
     }
 
-    if (req.user.role === 'Admin') {
+    if (req.user.role === 'Admin' || req.user.role === 'SuperAdmin') {
         next();
     } else {
         res.status(403).json({ message: 'Not authorized as an admin' });
@@ -80,7 +80,7 @@ const requirePermission = (module, action) => (req, res, next) => {
     }
 
     // Admins pass everything
-    if (req.user.role === 'Admin') {
+    if (req.user.role === 'Admin' || req.user.role === 'SuperAdmin') {
         return next();
     }
 

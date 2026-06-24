@@ -97,8 +97,8 @@ const createEmployee = async (req, res) => {
 // @access  Private/Admin
 const getEmployees = async (req, res) => {
     try {
-        // Show all users who are NOT Admins AND belong to the current admin's tenant
-        const users = await User.find({ role: { $ne: 'Admin' }, adminId: req.adminId }).sort({ createdAt: -1 });
+        // Show all users who are NOT Admins or SuperAdmins AND belong to the current admin's tenant
+        const users = await User.find({ role: { $nin: ['Admin', 'SuperAdmin'] }, adminId: req.adminId }).sort({ createdAt: -1 });
         res.json(users);
     } catch (error) {
         console.error('Error in getEmployees:', error);
@@ -119,9 +119,9 @@ const loginUser = async (req, res) => {
                 { email: { $regex: new RegExp(`^${id}$`, 'i') } }
             ]
         });
-        // Ensure only admins can login
-        if (user && user.role !== 'Admin') {
-            return res.status(401).json({ message: 'Only admin users can login.' });
+        // Ensure only admins and superadmins can login
+        if (user && user.role !== 'Admin' && user.role !== 'SuperAdmin') {
+            return res.status(401).json({ message: 'Only admin or superadmin users can login.' });
         }
         if (user && (await bcrypt.compare(password, user.password))) {
             // Check if user is verified
@@ -130,8 +130,9 @@ const loginUser = async (req, res) => {
             }
 
             const token = generateToken(user._id);
-            const cookieName = user.role === 'Admin' ? 'jwt_admin' : 'jwt_employee';
-            const otherCookie = user.role === 'Admin' ? 'jwt_employee' : 'jwt_admin';
+            const isAdminOrSuper = user.role === 'Admin' || user.role === 'SuperAdmin';
+            const cookieName = isAdminOrSuper ? 'jwt_admin' : 'jwt_employee';
+            const otherCookie = isAdminOrSuper ? 'jwt_employee' : 'jwt_admin';
 
             // Clear the "other" cookie to avoid RBAC leaks
             res.clearCookie(otherCookie);
@@ -439,7 +440,7 @@ const getMe = async (req, res) => {
 const logoutUser = (req, res) => {
     const { role } = req.query; // 'Admin' or 'Employee'
 
-    if (role === 'Admin') {
+    if (role === 'Admin' || role === 'SuperAdmin') {
         res.cookie('jwt_admin', '', { httpOnly: true, expires: new Date(0) });
     } else if (role === 'Employee') {
         res.cookie('jwt_employee', '', { httpOnly: true, expires: new Date(0) });
@@ -461,7 +462,7 @@ const updateUser = async (req, res) => {
 
         if (user) {
             // Authorization Check
-            const hasEditPermission = req.user && (req.user.role === 'Admin' || (req.user.permissions && req.user.permissions.employees && req.user.permissions.employees.edit));
+            const hasEditPermission = req.user && (req.user.role === 'Admin' || req.user.role === 'SuperAdmin' || (req.user.permissions && req.user.permissions.employees && req.user.permissions.employees.edit));
             const isSelf = req.user && req.user._id.toString() === user._id.toString();
 
             if (!hasEditPermission && !isSelf) {
@@ -469,8 +470,8 @@ const updateUser = async (req, res) => {
             }
 
             // Prevent non-owner-admins from updating owner-admin users (Base security)
-            const isTargetOwnerAdmin = user.role === 'Admin' && (!user.customRole);
-            const isRequesterOwnerAdmin = req.user.role === 'Admin' && (!req.user.customRole);
+            const isTargetOwnerAdmin = (user.role === 'Admin' || user.role === 'SuperAdmin') && (!user.customRole);
+            const isRequesterOwnerAdmin = (req.user.role === 'Admin' || req.user.role === 'SuperAdmin') && (!req.user.customRole);
 
             if (isTargetOwnerAdmin && !isRequesterOwnerAdmin) {
                 return res.status(403).json({ message: 'Only owner admins can edit other owner admins' });
@@ -554,9 +555,9 @@ const deleteUser = async (req, res) => {
         const user = await User.findById(req.params.id);
 
         if (user) {
-            // Prevent deleting Admins through this endpoint
-            if (user.role === 'Admin') {
-                return res.status(403).json({ message: 'Admins cannot be deleted through this endpoint' });
+            // Prevent deleting Admins/SuperAdmins through this endpoint
+            if (user.role === 'Admin' || user.role === 'SuperAdmin') {
+                return res.status(403).json({ message: 'Admins and SuperAdmins cannot be deleted through this endpoint' });
             }
 
             user.status = 'Deleted';
