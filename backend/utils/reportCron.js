@@ -44,11 +44,20 @@ const runAutoCheckOut = async () => {
 const sendDailyReport = async () => {
     try {
         console.log('[Cron] Starting daily report generation...');
-        
-        // Get yesterday's date string
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        const dateStr = getPKTDateString(yesterday);
+
+        // Window: yesterday 6:00 AM PKT → today 6:00 AM PKT (the moment this cron runs)
+        const now = getPKTTime();                         // today 6:00 AM PKT (approx)
+        const windowEnd = new Date(now);
+        const windowStart = new Date(now);
+        windowStart.setDate(windowStart.getDate() - 1);  // exactly 24 hours back
+
+        const yesterdayStr = getPKTDateString(windowStart);
+        const todayStr     = getPKTDateString(windowEnd);
+
+        // Label for subject / filename covers both dates if they differ
+        const dateLabel = yesterdayStr === todayStr
+            ? yesterdayStr
+            : `${yesterdayStr}_to_${todayStr}`;
 
         // Fetch all admins
         const admins = await User.find({ role: 'Admin' });
@@ -57,11 +66,24 @@ const sendDailyReport = async () => {
             return;
         }
 
-        // Fetch all attendance for yesterday
-        const attendance = await Attendance.find({ date: dateStr }).populate('userId', 'name employeeId department');
+        // Fetch records whose date string falls in either day of the window,
+        // then filter by checkIn falling within [windowStart, windowEnd]
+        const rawAttendance = await Attendance.find({
+            date: { $in: [yesterdayStr, todayStr] }
+        }).populate('userId', 'name employeeId department');
+
+        // Keep only records where checkIn is within the 6-to-6 window
+        // (records with no checkIn — e.g. absent — are included if their date == yesterdayStr)
+        const attendance = rawAttendance.filter(r => {
+            if (r.checkIn) {
+                return r.checkIn >= windowStart && r.checkIn < windowEnd;
+            }
+            // Absent/no-checkIn records: include if they belong to yesterday's date
+            return r.date === yesterdayStr;
+        });
 
         const workbook = new ExcelJS.Workbook();
-        const worksheet = workbook.addWorksheet(`Attendance_${dateStr}`);
+        const worksheet = workbook.addWorksheet(`Attendance_${dateLabel}`);
 
         worksheet.columns = [
             { header: 'Employee ID', key: 'empId', width: 15 },
@@ -113,18 +135,18 @@ const sendDailyReport = async () => {
             await transporter.sendMail({
                 from: `"HRMS Attendance System" <${process.env.EMAIL_USER}>`,
                 to: admin.email,
-                subject: `Daily Attendance Report - ${dateStr}`,
-                text: `Hello ${admin.name},\n\nPlease find attached the daily attendance report for ${dateStr}. This report includes details for Present, Absent, Short Hours, and Overtime status.\n\nRegards,\nHRMS Automation`,
+                subject: `Daily Attendance Report - ${dateLabel} (6AM–6AM)`,
+                text: `Hello ${admin.name},\n\nPlease find attached the daily attendance report covering the 24-hour window from ${yesterdayStr} 6:00 AM to ${todayStr} 6:00 AM (PKT). This report includes details for Present, Absent, Short Hours, and Overtime status.\n\nRegards,\nHRMS Automation`,
                 attachments: [
                     {
-                        filename: `Attendance_Report_${dateStr}.xlsx`,
+                        filename: `Attendance_Report_${dateLabel}.xlsx`,
                         content: buffer
                     }
                 ]
             });
         }
 
-        console.log(`[Cron] Daily report successfully sent for ${dateStr}`);
+        console.log(`[Cron] Daily report successfully sent for window ${yesterdayStr} 6AM → ${todayStr} 6AM`);
     } catch (error) {
         console.error('[Cron Error] Failed to send daily report:', error);
     }
