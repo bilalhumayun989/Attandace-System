@@ -2,12 +2,13 @@ import { API_BASE_URL } from '../../config';
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
-import { Calendar, Clock, Filter, Loader2 } from 'lucide-react';
+import { Calendar, Clock, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { Input } from '../../components/ui/Input';
 
 const MyAttendance = () => {
     const [attendance, setAttendance] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [expandedRows, setExpandedRows] = useState({});
     const [month, setMonth] = useState(() => {
         const d = new Date();
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -35,21 +36,15 @@ const MyAttendance = () => {
         }
     };
 
-    const format12h = (time24) => {
-        if (!time24) return '--:--';
+    const format12h = (time) => {
+        if (!time) return '--:--';
         try {
-            // Handle ISO string if provided
-            const date = new Date(time24);
+            const date = new Date(time);
             if (!isNaN(date.getTime())) {
                 return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
             }
-            // Handle HH:MM string
-            const [hours, minutes] = time24.split(':');
-            const h = parseInt(hours);
-            const ampm = h >= 12 ? 'PM' : 'AM';
-            const h12 = h % 12 || 12;
-            return `${h12}:${minutes} ${ampm}`;
-        } catch (e) { return time24; }
+        } catch (e) { /* fall through */ }
+        return '--:--';
     };
 
     const getStatusVariant = (status) => {
@@ -61,6 +56,13 @@ const MyAttendance = () => {
             default: return 'outline';
         }
     };
+
+    const toggleRow = (id) => {
+        setExpandedRows(prev => ({ ...prev, [id]: !prev[id] }));
+    };
+
+    // Determine if a record has multiple shift sessions
+    const hasMultipleShifts = (record) => record.shifts && record.shifts.length > 1;
 
     return (
         <div className="space-y-6 animate-in fade-in duration-500">
@@ -97,42 +99,99 @@ const MyAttendance = () => {
                             <table className="w-full text-sm text-left">
                                 <thead className="bg-muted/50 text-muted-foreground font-semibold">
                                     <tr>
+                                        <th className="px-4 py-4 w-8"></th>
                                         <th className="px-4 py-4">Date</th>
-                                        <th className="px-4 py-4">Check In</th>
-                                        <th className="px-4 py-4">Check Out</th>
-                                        <th className="px-4 py-4">Duration</th>
+                                        <th className="px-4 py-4">Last Check In</th>
+                                        <th className="px-4 py-4">Last Check Out</th>
+                                        <th className="px-4 py-4">Total Hours</th>
                                         <th className="px-4 py-4 text-center">Status</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-border/40">
                                     {attendance.length === 0 ? (
                                         <tr>
-                                            <td colSpan="5" className="p-12 text-center text-muted-foreground">
+                                            <td colSpan="6" className="p-12 text-center text-muted-foreground">
                                                 No records found for this month.
                                             </td>
                                         </tr>
                                     ) : (
-                                        attendance.map((record) => (
-                                            <tr key={record._id} className="hover:bg-muted/30 transition-colors">
-                                                <td className="px-4 py-4 font-medium">
-                                                    {new Date(record.date).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}
-                                                </td>
-                                                <td className="px-4 py-4 text-muted-foreground">
-                                                    {record.checkIn ? format12h(record.checkIn) : '--:--'}
-                                                </td>
-                                                <td className="px-4 py-4 text-muted-foreground">
-                                                    {record.checkOut ? format12h(record.checkOut) : '--:--'}
-                                                </td>
-                                                <td className="px-4 py-4">
-                                                    {record.duration ? `${Math.floor(record.duration / 60)}h ${record.duration % 60}m` : '--'}
-                                                </td>
-                                                <td className="px-4 py-4 text-center">
-                                                    <Badge variant={getStatusVariant(record.status)}>
-                                                        {record.status}
-                                                    </Badge>
-                                                </td>
-                                            </tr>
-                                        ))
+                                        attendance.map((record) => {
+                                            const isExpanded = expandedRows[record._id];
+                                            const multiShift = hasMultipleShifts(record);
+
+                                            // Determine last shift to show on the summary row
+                                            const lastShift = record.shifts && record.shifts.length > 0
+                                                ? record.shifts[record.shifts.length - 1]
+                                                : null;
+
+                                            const displayCheckIn = lastShift ? lastShift.checkIn : record.checkIn;
+                                            const displayCheckOut = lastShift ? lastShift.checkOut : record.checkOut;
+
+                                            return (
+                                                <React.Fragment key={record._id}>
+                                                    {/* Summary Row */}
+                                                    <tr
+                                                        className={`transition-colors ${multiShift ? 'cursor-pointer hover:bg-primary/5' : 'hover:bg-muted/30'} ${isExpanded ? 'bg-primary/5' : ''}`}
+                                                        onClick={() => multiShift && toggleRow(record._id)}
+                                                    >
+                                                        <td className="px-4 py-4 text-muted-foreground">
+                                                            {multiShift ? (
+                                                                isExpanded
+                                                                    ? <ChevronDown className="h-4 w-4 text-primary" />
+                                                                    : <ChevronRight className="h-4 w-4" />
+                                                            ) : null}
+                                                        </td>
+                                                        <td className="px-4 py-4 font-medium">
+                                                            <div className="flex items-center gap-2">
+                                                                {new Date(record.date + 'T00:00:00').toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                                                {multiShift && (
+                                                                    <span className="text-[10px] font-bold uppercase tracking-wider text-primary bg-primary/10 px-1.5 py-0.5 rounded-full">
+                                                                        {record.shifts.length} shifts
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-4 py-4 text-muted-foreground">
+                                                            {displayCheckIn ? format12h(displayCheckIn) : '--:--'}
+                                                        </td>
+                                                        <td className="px-4 py-4 text-muted-foreground">
+                                                            {displayCheckOut ? format12h(displayCheckOut) : (record.checkIn ? <span className="text-amber-500 font-medium">Active</span> : '--:--')}
+                                                        </td>
+                                                        <td className="px-4 py-4 font-semibold">
+                                                            {record.duration ? `${Math.floor(record.duration / 60)}h ${record.duration % 60}m` : '--'}
+                                                        </td>
+                                                        <td className="px-4 py-4 text-center">
+                                                            <Badge variant={getStatusVariant(record.status)}>
+                                                                {record.status}
+                                                            </Badge>
+                                                        </td>
+                                                    </tr>
+
+                                                    {/* Expanded Shift Sessions */}
+                                                    {isExpanded && record.shifts && record.shifts.map((shift, idx) => (
+                                                        <tr key={idx} className="bg-muted/20 border-t border-dashed border-border/30">
+                                                            <td className="px-4 py-2.5"></td>
+                                                            <td className="px-4 py-2.5 pl-8 text-muted-foreground text-xs font-medium">
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <Clock className="h-3 w-3 text-primary/60" />
+                                                                    Shift {idx + 1}
+                                                                </div>
+                                                            </td>
+                                                            <td className="px-4 py-2.5 text-xs text-foreground/80">
+                                                                {shift.checkIn ? format12h(shift.checkIn) : '--:--'}
+                                                            </td>
+                                                            <td className="px-4 py-2.5 text-xs text-foreground/80">
+                                                                {shift.checkOut ? format12h(shift.checkOut) : <span className="text-amber-500">Active</span>}
+                                                            </td>
+                                                            <td className="px-4 py-2.5 text-xs text-foreground/60">
+                                                                {shift.duration ? `${Math.floor(shift.duration / 60)}h ${shift.duration % 60}m` : '--'}
+                                                            </td>
+                                                            <td className="px-4 py-2.5"></td>
+                                                        </tr>
+                                                    ))}
+                                                </React.Fragment>
+                                            );
+                                        })
                                     )}
                                 </tbody>
                             </table>

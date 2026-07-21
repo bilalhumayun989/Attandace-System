@@ -1,5 +1,11 @@
 const mongoose = require('mongoose');
 
+const shiftSessionSchema = new mongoose.Schema({
+    checkIn: { type: Date },
+    checkOut: { type: Date },
+    duration: { type: Number, default: 0 }, // in minutes
+}, { _id: false });
+
 const attendanceSchema = new mongoose.Schema(
     {
         userId: {
@@ -18,8 +24,13 @@ const attendanceSchema = new mongoose.Schema(
             type: Date,
         },
         duration: {
-            type: Number, // in minutes
+            type: Number, // in minutes — total for the day (sum of all shifts)
             default: 0,
+        },
+        // Array of individual shift sessions for this day
+        shifts: {
+            type: [shiftSessionSchema],
+            default: [],
         },
         status: {
             type: String,

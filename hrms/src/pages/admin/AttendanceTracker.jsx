@@ -530,7 +530,14 @@ const AttendanceTracker = () => {
                     </div>
                 }
             >
-                {selectedRecord && (
+                {selectedRecord && (() => {
+                    const hasShifts = selectedRecord.shifts && selectedRecord.shifts.length > 0;
+                    const lastShift = hasShifts ? selectedRecord.shifts[selectedRecord.shifts.length - 1] : null;
+                    const displayCheckIn = lastShift ? lastShift.checkIn : selectedRecord.checkIn;
+                    const displayCheckOut = lastShift ? lastShift.checkOut : selectedRecord.checkOut;
+                    const isActive = selectedRecord.checkIn && !selectedRecord.checkOut;
+
+                    return (
                     <div className="space-y-4">
                         <div className="p-4 bg-muted/30 rounded-xl flex justify-between items-center">
                             <div>
@@ -544,16 +551,74 @@ const AttendanceTracker = () => {
                                 </div>
                             )}
                         </div>
+
+                        {/* Summary row — shows last shift times */}
                         <div className="grid grid-cols-2 gap-4">
                             <div className="p-3 border rounded-lg">
-                                <p className="text-xs text-muted-foreground">Check In</p>
-                                <p className="font-bold">{format12h(selectedRecord.checkIn)}</p>
+                                <p className="text-xs text-muted-foreground">
+                                    {hasShifts && selectedRecord.shifts.length > 1 ? 'Last Check In' : 'Check In'}
+                                </p>
+                                <p className="font-bold">{format12h(displayCheckIn)}</p>
                             </div>
                             <div className="p-3 border rounded-lg">
-                                <p className="text-xs text-muted-foreground">Check Out</p>
-                                <p className="font-bold">{format12h(selectedRecord.checkOut)}</p>
+                                <p className="text-xs text-muted-foreground">
+                                    {hasShifts && selectedRecord.shifts.length > 1 ? 'Last Check Out' : 'Check Out'}
+                                </p>
+                                <p className="font-bold">
+                                    {displayCheckOut
+                                        ? format12h(displayCheckOut)
+                                        : isActive
+                                            ? <span className="text-amber-500">Active</span>
+                                            : '-'}
+                                </p>
                             </div>
                         </div>
+
+                        {/* All shifts breakdown — only when multiple shifts exist */}
+                        {hasShifts && selectedRecord.shifts.length > 1 && (
+                            <div className="space-y-2 border-t border-border/40 pt-4">
+                                <p className="text-sm font-bold flex items-center gap-2">
+                                    <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-primary text-[10px] font-bold">
+                                        {selectedRecord.shifts.length}
+                                    </span>
+                                    All Shifts
+                                </p>
+                                <div className="rounded-lg border border-border/40 overflow-hidden">
+                                    <table className="w-full text-sm">
+                                        <thead className="bg-muted/50 text-muted-foreground text-xs font-semibold">
+                                            <tr>
+                                                <th className="px-3 py-2 text-left">Shift</th>
+                                                <th className="px-3 py-2 text-left">Check In</th>
+                                                <th className="px-3 py-2 text-left">Check Out</th>
+                                                <th className="px-3 py-2 text-left">Duration</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-border/40">
+                                            {selectedRecord.shifts.map((shift, idx) => (
+                                                <tr key={idx} className="hover:bg-muted/20">
+                                                    <td className="px-3 py-2.5 text-muted-foreground font-medium">#{idx + 1}</td>
+                                                    <td className="px-3 py-2.5">{shift.checkIn ? format12h(shift.checkIn) : '--:--'}</td>
+                                                    <td className="px-3 py-2.5">
+                                                        {shift.checkOut
+                                                            ? format12h(shift.checkOut)
+                                                            : <span className="text-amber-500 font-medium">Active</span>}
+                                                    </td>
+                                                    <td className="px-3 py-2.5 text-muted-foreground">
+                                                        {shift.duration != null
+                                                            ? `${Math.floor(shift.duration / 60)}h ${shift.duration % 60}m`
+                                                            : '--'}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div className="flex justify-between items-center px-1 pt-1">
+                                    <span className="text-xs text-muted-foreground">Total worked</span>
+                                    <span className="text-sm font-bold text-primary">{calculateHours(selectedRecord.duration)}</span>
+                                </div>
+                            </div>
+                        )}
 
 
                         {selectedRecord.overtimeIn && (
@@ -625,7 +690,8 @@ const AttendanceTracker = () => {
                             </select>
                         </div>
                     </div>
-                )}
+                    );
+                })()}
             </Modal>
 
             {/* Custom Add Attendance Modal */}

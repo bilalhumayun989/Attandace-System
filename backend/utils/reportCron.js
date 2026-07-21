@@ -15,8 +15,30 @@ const getPKTDateString = (date = new Date()) => {
 };
 
 const runAutoCheckOut = async () => {
-    // Auto-checkout disabled as there are no fixed shift boundaries.
-    // Missed checkouts are penalized at payroll generation.
+    try {
+        const pktNow = getPKTTime();
+        const twentyHoursAgo = new Date(pktNow.getTime() - (20 * 60 * 60 * 1000));
+
+        // Find all shifts where checkIn is older than 20 hours and checkOut is still null
+        const openShifts = await Attendance.find({
+            checkIn: { $ne: null, $lt: twentyHoursAgo },
+            checkOut: null
+        });
+
+        if (openShifts.length > 0) {
+            console.log(`[Cron] Found ${openShifts.length} open shifts older than 20 hours. Marking as Absent/Missed Checkout.`);
+            for (const shift of openShifts) {
+                shift.status = 'Absent'; // Mark as absent
+                shift.isCheckingOut = false;
+                // Leave checkOut as null, or set it to checkIn? 
+                // The user requested: "his attendance marked as missed checked out and he marked as abent"
+                // Leaving checkOut as null and status as 'Absent' will cause payroll to see it as Missed Checkout/Absent.
+                await shift.save();
+            }
+        }
+    } catch (error) {
+        console.error('[Cron Error] Failed to run auto checkout:', error);
+    }
 };
 
 const sendDailyReport = async () => {
@@ -205,8 +227,8 @@ cron.schedule('*/5 * * * *', () => {
     timezone: "Asia/Karachi"
 });
 
-// Schedule to run every day at 12:05 AM Asia/Karachi time
-cron.schedule('5 0 * * *', () => {
+// Schedule to run every day at 6:00 AM Asia/Karachi time
+cron.schedule('0 6 * * *', () => {
     sendDailyReport();
 }, {
     scheduled: true,

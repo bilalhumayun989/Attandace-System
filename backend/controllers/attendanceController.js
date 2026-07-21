@@ -180,26 +180,27 @@ const checkIn = async (req, res) => {
         const pktNow = getPKTTime();
         const dateStr = getPKTDateString(pktNow);
 
-        // Check if there is already an OPEN shift within the last 20 hours
-        const twentyHoursAgo = new Date(pktNow.getTime() - (20 * 60 * 60 * 1000));
+        // Find the most recent open shift
         const openShift = await Attendance.findOne({
             userId,
-            checkIn: { $gte: twentyHoursAgo },
+            checkIn: { $ne: null },
             checkOut: null
-        });
+        }).sort({ checkIn: -1 });
 
         if (openShift) {
-            return res.status(400).json({ message: 'You have an ongoing shift. Please check out first.' });
+            // Check if it's older than 20 hours
+            const twentyHoursAgo = new Date(pktNow.getTime() - (20 * 60 * 60 * 1000));
+            if (openShift.checkIn < twentyHoursAgo) {
+                // Auto-close as missed checkout/absent
+                openShift.status = 'Absent';
+                await openShift.save();
+            } else {
+                return res.status(400).json({ message: 'You have an ongoing shift. Please check out first.' });
+            }
         }
 
-        // Check if already checked in today
+        // Check if there's already a record for today
         let attendance = await Attendance.findOne({ userId, date: dateStr });
-        if (attendance && attendance.checkOut) {
-            return res.status(400).json({ message: 'You have already checked out for today. See you tomorrow!' });
-        }
-        if (attendance && attendance.checkIn) {
-            return res.status(400).json({ message: 'Already checked in today' });
-        }
 
         const status = 'Present';
 
@@ -212,7 +213,10 @@ const checkIn = async (req, res) => {
                 adminId: req.adminId
             });
         } else {
+            // They already worked today and checked out. We allow them to start another shift.
+            // We do NOT reset the duration. We just open the shift again.
             attendance.checkIn = pktNow;
+            attendance.checkOut = null; // Re-open the shift
             attendance.status = status;
         }
 
@@ -229,34 +233,30 @@ const checkIn = async (req, res) => {
     }
 };
 
-// @desc    Check Out
-// @route   POST /api/attendance/checkout
-// @access  Private
 const checkOut = async (req, res) => {
     try {
         const userId = req.user._id;
         const pktNow = getPKTTime();
 
-        const twentyHoursAgo = new Date(pktNow.getTime() - (20 * 60 * 60 * 1000));
-        
-        // Find the most recent open shift within the last 20 hours
+        // Find the most recent open shift
         let attendance = await Attendance.findOne({
             userId,
-            checkIn: { $gte: twentyHoursAgo },
+            checkIn: { $ne: null },
             checkOut: null
         }).sort({ checkIn: -1 });
 
-        // If not found, try to see if they just forgot to check in today (for a clearer error)
         if (!attendance) {
-             const dateStr = getPKTDateString(pktNow);
-             const todayRecord = await Attendance.findOne({ userId, date: dateStr });
-             if (todayRecord && todayRecord.checkOut) {
-                 return res.status(400).json({ message: 'Already checked out today' });
-             }
              return res.status(400).json({ message: 'No active shift found. You must check in first.' });
         }
 
-        // Determine shift duration and effective checkout
+        // Check if it's older than 20 hours
+        const twentyHoursAgo = new Date(pktNow.getTime() - (20 * 60 * 60 * 1000));
+        if (attendance.checkIn < twentyHoursAgo) {
+            attendance.status = 'Absent'; // Missed checkout
+            await attendance.save();
+            return res.status(400).json({ message: 'Your previous shift expired after 20 hours. Please check in again.' });
+        }
+
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ message: 'User not found' });
         if (user.status === 'Deleted') return res.status(400).json({ message: 'Deleted users cannot mark attendance' });
@@ -264,13 +264,77 @@ const checkOut = async (req, res) => {
         const checkInTime = new Date(attendance.checkIn);
         let effectiveCheckOut = pktNow;
         
-        attendance.checkOut = effectiveCheckOut;
-        const durationMs = effectiveCheckOut - checkInTime;
-        const totalDurationMins = Math.floor(durationMs / (1000 * 60));
-        attendance.duration = totalDurationMins > 0 ? totalDurationMins : 0;
-        attendance.status = 'Present'; // Keep it Present based on new simple logic
+        // Check if the shift crosses midnight
+        const checkInDateStr = getPKTDateString(checkInTime);
+        const checkOutDateStr = getPKTDateString(effectiveCheckOut);
 
-        await attendance.save();
+        if (checkInDateStr !== checkOutDateStr) {
+            // Crosses midnight! Split the hours.
+            // 1. Calculate time until midnight for the check-in day
+            const midnight = new Date(checkInTime);
+            midnight.setHours(23, 59, 59, 999);
+            
+            const durationMsDay1 = midnight - checkInTime;
+            const durationMinsDay1 = Math.floor(durationMsDay1 / (1000 * 60));
+            
+            attendance.checkOut = midnight;
+            attendance.duration = (attendance.duration || 0) + (durationMinsDay1 > 0 ? durationMinsDay1 : 0);
+            attendance.status = 'Present';
+            // Record this partial session (up to midnight)
+            if (!attendance.shifts) attendance.shifts = [];
+            attendance.shifts.push({
+                checkIn: checkInTime,
+                checkOut: midnight,
+                duration: durationMinsDay1 > 0 ? durationMinsDay1 : 0
+            });
+            await attendance.save();
+
+            // 2. Calculate time from midnight to checkout for the next day
+            const nextDayStart = new Date(effectiveCheckOut);
+            nextDayStart.setHours(0, 0, 0, 0);
+
+            const durationMsDay2 = effectiveCheckOut - nextDayStart;
+            const durationMinsDay2 = Math.floor(durationMsDay2 / (1000 * 60));
+
+            let nextDayAttendance = await Attendance.findOne({ userId, date: checkOutDateStr });
+            if (!nextDayAttendance) {
+                nextDayAttendance = new Attendance({
+                    userId,
+                    date: checkOutDateStr,
+                    checkIn: nextDayStart,
+                    checkOut: effectiveCheckOut,
+                    duration: durationMinsDay2 > 0 ? durationMinsDay2 : 0,
+                    status: 'Present',
+                    adminId: attendance.adminId,
+                    shifts: [{ checkIn: nextDayStart, checkOut: effectiveCheckOut, duration: durationMinsDay2 > 0 ? durationMinsDay2 : 0 }]
+                });
+            } else {
+                nextDayAttendance.checkIn = nextDayStart;
+                nextDayAttendance.checkOut = effectiveCheckOut;
+                nextDayAttendance.duration = (nextDayAttendance.duration || 0) + (durationMinsDay2 > 0 ? durationMinsDay2 : 0);
+                nextDayAttendance.status = 'Present';
+                if (!nextDayAttendance.shifts) nextDayAttendance.shifts = [];
+                nextDayAttendance.shifts.push({ checkIn: nextDayStart, checkOut: effectiveCheckOut, duration: durationMinsDay2 > 0 ? durationMinsDay2 : 0 });
+            }
+            await nextDayAttendance.save();
+            
+            attendance = nextDayAttendance; // Return the most recent one
+        } else {
+            // Same day checkout
+            const durationMs = effectiveCheckOut - checkInTime;
+            const durationMins = Math.floor(durationMs / (1000 * 60));
+            attendance.checkOut = effectiveCheckOut;
+            attendance.duration = (attendance.duration || 0) + (durationMins > 0 ? durationMins : 0);
+            attendance.status = 'Present';
+            // Record this session
+            if (!attendance.shifts) attendance.shifts = [];
+            attendance.shifts.push({
+                checkIn: checkInTime,
+                checkOut: effectiveCheckOut,
+                duration: durationMins > 0 ? durationMins : 0
+            });
+            await attendance.save();
+        }
 
         res.json({
             message: 'Checked out successfully',
@@ -283,6 +347,7 @@ const checkOut = async (req, res) => {
     }
 };
 
+
 // @desc    Get Current Status (for timer persistence)
 // @route   GET /api/attendance/status
 // @access  Private
@@ -292,17 +357,23 @@ const getAttendanceStatus = async (req, res) => {
         const pktNow = getPKTTime();
         const dateStr = getPKTDateString(pktNow);
 
-        // First, see if there's an open shift within the last 20 hours
-        const twentyHoursAgo = new Date(pktNow.getTime() - (20 * 60 * 60 * 1000));
+        // Find any open shift
         let attendance = await Attendance.findOne({
             userId,
-            checkIn: { $gte: twentyHoursAgo },
+            checkIn: { $ne: null },
             checkOut: null
         }).sort({ checkIn: -1 });
 
-        // If no open 20-hour shift, return today's calendar record (if any)
+        // If no open shift, return today's calendar record (if any)
         if (!attendance) {
             attendance = await Attendance.findOne({ userId, date: dateStr });
+        } else {
+            // If there is an open shift, check if it's older than 20 hours
+            const twentyHoursAgo = new Date(pktNow.getTime() - (20 * 60 * 60 * 1000));
+            if (attendance.checkIn < twentyHoursAgo) {
+                // Return today's record instead, because the open one is expired
+                attendance = await Attendance.findOne({ userId, date: dateStr });
+            }
         }
 
         res.json(attendance || null);
@@ -623,25 +694,82 @@ const faceCheckIn = async (req, res) => {
 
         const twentyHoursAgo = new Date(pktNow.getTime() - (20 * 60 * 60 * 1000));
         
-        // Find an open shift within the last 20 hours
+        // Find an open shift
         let openShift = await Attendance.findOne({
             userId,
-            checkIn: { $gte: twentyHoursAgo },
+            checkIn: { $ne: null },
             checkOut: null
         }).sort({ checkIn: -1 });
+
+        // Check if open shift is older than 20 hours (missed checkout)
+        if (openShift && openShift.checkIn < twentyHoursAgo) {
+            openShift.status = 'Absent'; // Missed checkout
+            await openShift.save();
+            openShift = null; // Clear it so we trigger a new check-in below
+        }
 
         // --- REPEAT SCAN (Check-Out) ---
         if (openShift) {
             const checkInTime = new Date(openShift.checkIn);
             let effectiveCheckOut = pktNow;
 
-            openShift.checkOut = effectiveCheckOut;
-            openShift.markedByFace = true;
+            const checkInDateStr = getPKTDateString(checkInTime);
+            const checkOutDateStr = getPKTDateString(effectiveCheckOut);
 
-            const regularDurationMs = Math.max(0, effectiveCheckOut - checkInTime);
-            openShift.duration = Math.floor(regularDurationMs / (1000 * 60));
+            if (checkInDateStr !== checkOutDateStr) {
+                // Crosses midnight! Split the hours.
+                const midnight = new Date(checkInTime);
+                midnight.setHours(23, 59, 59, 999);
+                
+                const durationMsDay1 = midnight - checkInTime;
+                const durationMinsDay1 = Math.floor(durationMsDay1 / (1000 * 60));
+                
+                openShift.checkOut = midnight;
+                openShift.duration = (openShift.duration || 0) + (durationMinsDay1 > 0 ? durationMinsDay1 : 0);
+                openShift.markedByFace = true;
+                if (!openShift.shifts) openShift.shifts = [];
+                openShift.shifts.push({ checkIn: checkInTime, checkOut: midnight, duration: durationMinsDay1 > 0 ? durationMinsDay1 : 0 });
+                await openShift.save();
 
-            await openShift.save();
+                const nextDayStart = new Date(effectiveCheckOut);
+                nextDayStart.setHours(0, 0, 0, 0);
+
+                const durationMsDay2 = effectiveCheckOut - nextDayStart;
+                const durationMinsDay2 = Math.floor(durationMsDay2 / (1000 * 60));
+
+                let nextDayAttendance = await Attendance.findOne({ userId, date: checkOutDateStr });
+                if (!nextDayAttendance) {
+                    nextDayAttendance = new Attendance({
+                        userId,
+                        date: checkOutDateStr,
+                        checkIn: nextDayStart,
+                        checkOut: effectiveCheckOut,
+                        duration: durationMinsDay2 > 0 ? durationMinsDay2 : 0,
+                        status: 'Present',
+                        adminId: openShift.adminId,
+                        markedByFace: true,
+                        shifts: [{ checkIn: nextDayStart, checkOut: effectiveCheckOut, duration: durationMinsDay2 > 0 ? durationMinsDay2 : 0 }]
+                    });
+                } else {
+                    nextDayAttendance.checkIn = nextDayStart;
+                    nextDayAttendance.checkOut = effectiveCheckOut;
+                    nextDayAttendance.duration = (nextDayAttendance.duration || 0) + (durationMinsDay2 > 0 ? durationMinsDay2 : 0);
+                    nextDayAttendance.markedByFace = true;
+                    if (!nextDayAttendance.shifts) nextDayAttendance.shifts = [];
+                    nextDayAttendance.shifts.push({ checkIn: nextDayStart, checkOut: effectiveCheckOut, duration: durationMinsDay2 > 0 ? durationMinsDay2 : 0 });
+                }
+                await nextDayAttendance.save();
+            } else {
+                // Same day checkout
+                openShift.checkOut = effectiveCheckOut;
+                openShift.markedByFace = true;
+                const regularDurationMs = Math.max(0, effectiveCheckOut - checkInTime);
+                const durationMins = Math.floor(regularDurationMs / (1000 * 60));
+                openShift.duration = (openShift.duration || 0) + (durationMins > 0 ? durationMins : 0);
+                if (!openShift.shifts) openShift.shifts = [];
+                openShift.shifts.push({ checkIn: checkInTime, checkOut: effectiveCheckOut, duration: durationMins > 0 ? durationMins : 0 });
+                await openShift.save();
+            }
 
             return res.json({
                 action: 'checkout',
@@ -651,18 +779,10 @@ const faceCheckIn = async (req, res) => {
             });
         }
 
-        // If no open shift, check if they already completed a shift TODAY
-        let todayRecord = await Attendance.findOne({ userId, date: dateStr });
-        if (todayRecord && todayRecord.checkOut) {
-            return res.json({
-                action: 'completed',
-                employeeName: user.name,
-                message: 'Shift already completed for today. See you tomorrow!'
-            });
-        }
-
         // --- INITIAL SCAN (Check-In) ---
-        if (!todayRecord || !todayRecord.checkIn) {
+        let todayRecord = await Attendance.findOne({ userId, date: dateStr });
+        
+        if (!todayRecord) {
             let attendance = new Attendance({
                 userId,
                 date: dateStr,
@@ -672,16 +792,20 @@ const faceCheckIn = async (req, res) => {
                 markedByFace: true
             });
             await attendance.save();
-
-            return res.json({
-                action: 'checkin',
-                employeeName: user.name,
-                checkInTime: format12h(formatInTimeZone(pktNow, 'Asia/Karachi', 'HH:mm')),
-                message: 'Checked In'
-            });
+        } else {
+            // Already checked out today, start new shift
+            todayRecord.checkIn = pktNow;
+            todayRecord.checkOut = null; // Open new shift
+            todayRecord.markedByFace = true;
+            await todayRecord.save();
         }
 
-        return res.json({ action: 'none', message: 'No action taken' });
+        return res.json({
+            action: 'checkin',
+            employeeName: user.name,
+            checkInTime: format12h(formatInTimeZone(pktNow, 'Asia/Karachi', 'HH:mm')),
+            message: 'Checked In'
+        });
 
     } catch (error) {
         console.error('Error in faceCheckIn:', error);

@@ -1,30 +1,21 @@
 import { API_BASE_URL } from '../../config';
-import { useNavigate, Link, useLocation } from 'react-router-dom';
-import { Lock, Mail, Building2, User, ArrowLeft, Eye, EyeOff } from 'lucide-react';
+import { useNavigate, Link } from 'react-router-dom';
+import { Lock, User, ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '../../components/ui/Card';
 import { useAuth } from '../../context/AuthContext';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 
 const Login = () => {
-    const location = useLocation();
     const navigate = useNavigate();
     const [id, setId] = useState('');
-
     const [password, setPassword] = useState('');
-    const [role, setRole] = useState('employee'); // 'employee' | 'admin'
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
 
     const { login } = useAuth();
-
-    useEffect(() => {
-        if (location.state?.role) {
-            setRole(location.state.role);
-        }
-    }, [location.state]);
 
     const handleLogin = async (e) => {
         e.preventDefault();
@@ -37,7 +28,6 @@ const Login = () => {
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
                 body: JSON.stringify({ id, password }),
-
             });
 
             const data = await response.json();
@@ -74,37 +64,13 @@ const Login = () => {
                         Back
                     </Button>
                 </div>
-                <CardHeader className="text-center">
+                <CardHeader className="text-center pt-12">
                     <CardTitle className="text-3xl font-bold tracking-tight text-primary">Welcome Back</CardTitle>
                     <CardDescription>
                         Enter your credentials to access the workspace
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
-                    {/* Role Toggle */}
-                    <div className="grid grid-cols-2 gap-2 p-1 mb-6 bg-muted/50 rounded-lg">
-                        <button
-                            onClick={() => setRole('employee')}
-                            className={`flex items-center justify-center gap-2 py-2 text-sm font-medium rounded-md transition-all ${role === 'employee'
-                                ? 'bg-background text-foreground shadow-sm'
-                                : 'text-muted-foreground hover:text-foreground'
-                                }`}
-                        >
-                            <User size={16} />
-                            Employee
-                        </button>
-                        <button
-                            onClick={() => setRole('admin')}
-                            className={`flex items-center justify-center gap-2 py-2 text-sm font-medium rounded-md transition-all ${role === 'admin'
-                                ? 'bg-background text-foreground shadow-sm'
-                                : 'text-muted-foreground hover:text-foreground'
-                                }`}
-                        >
-                            <Building2 size={16} />
-                            Admin
-                        </button>
-                    </div>
-
                     <form onSubmit={handleLogin} className="space-y-4">
                         {error && (
                             <div className="p-3 text-sm text-red-500 bg-red-100 rounded-md text-center font-medium animate-in fade-in zoom-in duration-300">
@@ -119,7 +85,6 @@ const Login = () => {
                                     type="text"
                                     placeholder="EMP-001 or name@company.com"
                                     className="pl-10"
-
                                     value={id}
                                     onChange={(e) => setId(e.target.value)}
                                     required
@@ -127,11 +92,10 @@ const Login = () => {
                             </div>
                         </div>
 
-
                         <div className="space-y-2">
                             <div className="flex items-center justify-between">
                                 <label className="text-sm font-medium leading-none">Password</label>
-                                <Link to="/forgot-password" size="sm" className="text-sm font-medium text-primary hover:underline">
+                                <Link to="/forgot-password" className="text-sm font-medium text-primary hover:underline">
                                     Forgot password?
                                 </Link>
                             </div>
@@ -165,6 +129,17 @@ const Login = () => {
                         <Link to="/register" className="font-semibold text-primary hover:underline">
                             Register Agency
                         </Link>
+                    </div>
+                    <div className="text-xs text-muted-foreground/50">
+                        Developed by{' '}
+                        <a
+                            href="https://broshtech.com"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-primary/60 hover:text-primary font-medium transition-colors duration-200 hover:underline"
+                        >
+                            Broshtech
+                        </a>
                     </div>
                 </CardFooter>
             </Card>

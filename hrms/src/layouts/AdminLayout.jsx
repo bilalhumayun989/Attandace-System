@@ -97,6 +97,21 @@ const AdminLayout = () => {
                             Logout
                         </Button>
                     </div>
+
+                    {/* Developer Credit */}
+                    <div className="px-4 py-3 border-t border-border/20 bg-muted/10">
+                        <p className="text-xs text-center text-muted-foreground/60">
+                            Developed by{' '}
+                            <a
+                                href="https://broshtech.com"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-primary/70 hover:text-primary font-medium transition-colors duration-200 hover:underline"
+                            >
+                                Broshtech
+                            </a>
+                        </p>
+                    </div>
                 </aside>
 
                 {/* Main Content */}
