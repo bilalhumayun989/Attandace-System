@@ -69,6 +69,7 @@ app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/attendance', require('./routes/attendanceRoutes'));
 app.use('/api/payroll', require('./routes/payrollRoutes'));
 app.use('/api/admin-leave', require('./routes/leaveRoutes'));
+app.use('/api/cron', require('./routes/cronRoutes'));
 
 
 // Basic route

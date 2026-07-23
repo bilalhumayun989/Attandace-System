@@ -8,8 +8,8 @@ const { sendDailyReport } = require('../utils/reportCron');
 // @access  Private/Admin
 const triggerManualReport = async (req, res) => {
     try {
-        await sendDailyReport();
-        res.json({ message: 'Daily report email triggered successfully' });
+        const result = await sendDailyReport();
+        res.json({ message: 'Daily report email triggered successfully', result });
     } catch (error) {
         res.status(500).json({ message: 'Failed to send report', error: error.message });
     }

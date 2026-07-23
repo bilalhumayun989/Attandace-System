@@ -45,40 +45,50 @@ const sendDailyReport = async () => {
     try {
         console.log('[Cron] Starting daily report generation...');
 
-        // Window: yesterday 6:00 AM PKT → today 6:00 AM PKT (the moment this cron runs)
-        const now = getPKTTime();                         // today 6:00 AM PKT (approx)
-        const windowEnd = new Date(now);
-        const windowStart = new Date(now);
-        windowStart.setDate(windowStart.getDate() - 1);  // exactly 24 hours back
+        if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+            console.error('[Cron Error] EMAIL_USER or EMAIL_PASS missing in environment variables.');
+            throw new Error('Email credentials (EMAIL_USER / EMAIL_PASS) are not configured in backend environment variables.');
+        }
 
-        const yesterdayStr = getPKTDateString(windowStart);
-        const todayStr     = getPKTDateString(windowEnd);
+        // Window: yesterday 6:00 AM PKT → today 6:00 AM PKT
+        const pktNow = getPKTTime();
+        const todayStr = getPKTDateString(pktNow);
 
-        // Label for subject / filename covers both dates if they differ
+        // windowEnd = today 06:00:00 PKT
+        const windowEnd = new Date(`${todayStr}T06:00:00+05:00`);
+        // windowStart = 24 hours back (yesterday 06:00:00 PKT)
+        const windowStart = new Date(windowEnd.getTime() - (24 * 60 * 60 * 1000));
+
+        const yesterdayStr = formatInTimeZone(windowStart, 'Asia/Karachi', 'yyyy-MM-dd');
+
+        console.log(`[Cron] Window: ${yesterdayStr} 06:00 AM PKT -> ${todayStr} 06:00 AM PKT`);
+
         const dateLabel = yesterdayStr === todayStr
             ? yesterdayStr
             : `${yesterdayStr}_to_${todayStr}`;
 
-        // Fetch all admins
-        const admins = await User.find({ role: 'Admin' });
+        // Fetch all active admins case-insensitively
+        const admins = await User.find({
+            role: { $regex: /^admin$/i },
+            status: { $ne: 'Deleted' }
+        });
+
         if (admins.length === 0) {
-            console.log('[Cron] No admins found to send report.');
-            return;
+            console.log('[Cron] No active admins found to send report.');
+            return { success: false, message: 'No active admins found to send report.' };
         }
 
-        // Fetch records whose date string falls in either day of the window,
-        // then filter by checkIn falling within [windowStart, windowEnd]
+        // Fetch records whose date string falls in either day of the window
         const rawAttendance = await Attendance.find({
             date: { $in: [yesterdayStr, todayStr] }
         }).populate('userId', 'name employeeId department');
 
-        // Keep only records where checkIn is within the 6-to-6 window
+        // Keep only records where checkIn is within [windowStart, windowEnd)
         // (records with no checkIn — e.g. absent — are included if their date == yesterdayStr)
         const attendance = rawAttendance.filter(r => {
             if (r.checkIn) {
                 return r.checkIn >= windowStart && r.checkIn < windowEnd;
             }
-            // Absent/no-checkIn records: include if they belong to yesterday's date
             return r.date === yesterdayStr;
         });
 
@@ -129,6 +139,9 @@ const sendDailyReport = async () => {
             }
         });
 
+        let sentCount = 0;
+        const sentAdmins = [];
+
         for (const admin of admins) {
             if (!admin.email) continue;
             
@@ -144,11 +157,21 @@ const sendDailyReport = async () => {
                     }
                 ]
             });
+            sentCount++;
+            sentAdmins.push(admin.email);
         }
 
-        console.log(`[Cron] Daily report successfully sent for window ${yesterdayStr} 6AM → ${todayStr} 6AM`);
+        console.log(`[Cron] Daily report successfully sent to ${sentCount} admin(s) (${sentAdmins.join(', ')}) for window ${yesterdayStr} 6AM → ${todayStr} 6AM`);
+        return {
+            success: true,
+            sentCount,
+            sentAdmins,
+            window: `${yesterdayStr} 06:00 AM PKT → ${todayStr} 06:00 AM PKT`,
+            recordsCount: attendance.length
+        };
     } catch (error) {
         console.error('[Cron Error] Failed to send daily report:', error);
+        throw error;
     }
 };
 
