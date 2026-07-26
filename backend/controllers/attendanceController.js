@@ -8,7 +8,23 @@ const { sendDailyReport } = require('../utils/reportCron');
 // @access  Private/Admin
 const triggerManualReport = async (req, res) => {
     try {
-        const result = await sendDailyReport();
+        // Resolve the correct tenant root (Admin) ID
+        // - If logged in as Admin: req.user._id is the tenant root
+        // - If logged in as SuperAdmin: req.user.adminId is the tenant root
+        let tenantId;
+        if (req.user.role === 'Admin') {
+            tenantId = req.user._id;
+        } else if (req.user.role === 'SuperAdmin') {
+            tenantId = req.user.adminId;
+        } else {
+            return res.status(403).json({ message: 'Only Admin or SuperAdmin can trigger reports.' });
+        }
+
+        if (!tenantId) {
+            return res.status(400).json({ message: 'Could not resolve tenant — adminId missing on account.' });
+        }
+
+        const result = await sendDailyReport(tenantId);
         res.json({ message: 'Daily report email triggered successfully', result });
     } catch (error) {
         res.status(500).json({ message: 'Failed to send report', error: error.message });

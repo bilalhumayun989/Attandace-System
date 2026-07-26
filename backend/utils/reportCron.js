@@ -41,57 +41,118 @@ const runAutoCheckOut = async () => {
     }
 };
 
-const sendDailyReport = async () => {
+// tenantId: if provided, only sends report for that specific tenant (manual trigger)
+// if omitted, sends for ALL tenants (cron job at 6 AM)
+const sendDailyReport = async (tenantId = null) => {
     try {
-        console.log('[Cron] Starting daily report generation...');
+        console.log('[Report] Starting daily report generation...');
 
         if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-            console.error('[Cron Error] EMAIL_USER or EMAIL_PASS missing in environment variables.');
-            throw new Error('Email credentials (EMAIL_USER / EMAIL_PASS) are not configured in backend environment variables.');
+            throw new Error('EMAIL_USER or EMAIL_PASS not configured in environment variables.');
         }
 
-        // Window: yesterday 6:00 AM PKT → today 6:00 AM PKT
-        const pktNow = getPKTTime();
-        const todayStr = getPKTDateString(pktNow);
+        // --- WINDOW CALCULATION ---
+        const now = new Date(); // real UTC now
+        let windowStart, windowEnd, windowLabel, dateLabel, datesToQuery;
 
-        // windowEnd = today 06:00:00 PKT
-        const windowEnd = new Date(`${todayStr}T06:00:00+05:00`);
-        // windowStart = 24 hours back (yesterday 06:00:00 PKT)
-        const windowStart = new Date(windowEnd.getTime() - (24 * 60 * 60 * 1000));
+        if (tenantId) {
+            // Manual trigger: last 24 hours from now
+            // e.g. clicked at 3 PM today → yesterday 3 PM → today 3 PM
+            windowEnd   = now;
+            windowStart = new Date(now.getTime() - (24 * 60 * 60 * 1000));
 
-        const yesterdayStr = formatInTimeZone(windowStart, 'Asia/Karachi', 'yyyy-MM-dd');
+            const startLabel = formatInTimeZone(windowStart, 'Asia/Karachi', 'yyyy-MM-dd hh:mm a');
+            const endLabel   = formatInTimeZone(windowEnd,   'Asia/Karachi', 'yyyy-MM-dd hh:mm a');
+            windowLabel = `${startLabel} to ${endLabel} (PKT)`;
+            dateLabel   = formatInTimeZone(now, 'Asia/Karachi', 'yyyy-MM-dd');
 
-        console.log(`[Cron] Window: ${yesterdayStr} 06:00 AM PKT -> ${todayStr} 06:00 AM PKT`);
+            // Could span two calendar dates — query both
+            const startDateStr = formatInTimeZone(windowStart, 'Asia/Karachi', 'yyyy-MM-dd');
+            const endDateStr   = formatInTimeZone(windowEnd,   'Asia/Karachi', 'yyyy-MM-dd');
+            datesToQuery = startDateStr === endDateStr ? [startDateStr] : [startDateStr, endDateStr];
 
-        const dateLabel = yesterdayStr === todayStr
-            ? yesterdayStr
-            : `${yesterdayStr}_to_${todayStr}`;
+            console.log(`[Report] Manual trigger for tenant ${tenantId} — window: ${windowLabel}`);
+        } else {
+            // Cron: yesterday 6 AM PKT → today 6 AM PKT (fixed window)
+            const todayStr = getPKTDateString();
+            windowEnd   = new Date(`${todayStr}T06:00:00+05:00`);
+            windowStart = new Date(windowEnd.getTime() - (24 * 60 * 60 * 1000));
 
-        // Fetch all active admins case-insensitively
-        const admins = await User.find({
-            role: { $regex: /^admin$/i },
-            status: { $ne: 'Deleted' }
-        });
+            const yesterdayStr = formatInTimeZone(windowStart, 'Asia/Karachi', 'yyyy-MM-dd');
+            dateLabel   = `${yesterdayStr}_to_${todayStr}`;
+            windowLabel = `${yesterdayStr} 6:00 AM to ${todayStr} 6:00 AM (PKT)`;
+            datesToQuery = [yesterdayStr, todayStr];
 
-        if (admins.length === 0) {
-            console.log('[Cron] No active admins found to send report.');
-            return { success: false, message: 'No active admins found to send report.' };
+            console.log(`[Report] Cron window: ${windowLabel}`);
         }
 
-        // Fetch all attendance records for the window, populate adminId too for per-admin filtering
-        const rawAttendance = await Attendance.find({
-            date: { $in: [yesterdayStr, todayStr] }
-        }).populate('userId', 'name employeeId department adminId');
+        // --- FETCH ADMINS ---
+        const adminQuery = {
+            role: 'Admin',
+            status: { $ne: 'Deleted' },
+            ...(tenantId && { _id: tenantId })
+        };
+        const tenantAdmins = await User.find(adminQuery);
+        console.log(`[Report] Found ${tenantAdmins.length} admin tenant(s): ${tenantAdmins.map(a => `${a.name} (${a.email || 'NO EMAIL'})`).join(', ')}`);
 
-        // Keep only records within the 6-to-6 window
-        // Absent records (no checkIn) are included if their date == yesterdayStr
+        if (tenantAdmins.length === 0) {
+            console.log('[Report] No active admin found for the given tenantId.');
+            return { success: false, message: 'No active admin found.' };
+        }
+
+        // --- FETCH SUPERADMINS ---
+        const superAdminQuery = {
+            role: 'SuperAdmin',
+            status: { $ne: 'Deleted' },
+            ...(tenantId && { adminId: tenantId })
+        };
+        const superAdmins = await User.find(superAdminQuery);
+        console.log(`[Report] Found ${superAdmins.length} SuperAdmin(s).`);
+
+        // --- BUILD TENANT MAP: tid → { recipients[], tenantAdminName } ---
+        const tenantMap = {};
+        for (const admin of tenantAdmins) {
+            const tid = admin._id.toString();
+            tenantMap[tid] = { recipients: [], tenantAdminName: admin.name };
+            if (admin.email) {
+                tenantMap[tid].recipients.push(admin);
+            } else {
+                console.log(`[Report] WARNING: Admin "${admin.name}" has no email — will not receive report.`);
+            }
+        }
+        for (const sa of superAdmins) {
+            const tid = sa.adminId?.toString();
+            if (tid && tenantMap[tid] && sa.email) {
+                tenantMap[tid].recipients.push(sa);
+            }
+        }
+
+        // --- FETCH ATTENDANCE ---
+        // Use Attendance.adminId directly (stored on each record) — more reliable than userId.adminId populate
+        const attendanceQuery = { date: { $in: datesToQuery } };
+        if (tenantId) {
+            // For manual trigger scope to this tenant's records only
+            attendanceQuery.adminId = tenantId;
+        }
+
+        const rawAttendance = await Attendance.find(attendanceQuery)
+            .populate('userId', 'name employeeId department adminId');
+
+        console.log(`[Report] Raw attendance fetched: ${rawAttendance.length} records for dates [${datesToQuery.join(', ')}]`);
+
+        // Filter records whose checkIn falls inside the window
+        // Absent records (no checkIn) — include if their date falls within the window's date range
         const allAttendance = rawAttendance.filter(r => {
             if (r.checkIn) {
                 return r.checkIn >= windowStart && r.checkIn < windowEnd;
             }
-            return r.date === yesterdayStr;
+            // No checkIn (absent) — include if the record date is in our query range
+            return datesToQuery.includes(r.date);
         });
 
+        console.log(`[Report] After window filter: ${allAttendance.length} records.`);
+
+        // --- SEND EMAILS ---
         const transporter = nodemailer.createTransport({
             service: 'gmail',
             auth: {
@@ -101,51 +162,51 @@ const sendDailyReport = async () => {
         });
 
         let sentCount = 0;
-        const sentAdmins = [];
+        const sentLog = [];
 
-        // Each admin gets ONLY their own employees' attendance
-        for (const admin of admins) {
-            if (!admin.email) continue;
-
-            const adminAttendance = allAttendance.filter(r =>
-                r.userId?.adminId?.toString() === admin._id.toString()
-            );
-
-            if (adminAttendance.length === 0) {
-                console.log(`[Cron] No records for admin ${admin.name} — skipping email.`);
+        for (const [tid, { recipients, tenantAdminName }] of Object.entries(tenantMap)) {
+            if (recipients.length === 0) {
+                console.log(`[Report] Tenant "${tenantAdminName}" — no email address on record, skipping.`);
                 continue;
             }
 
-            // Build a separate Excel for this admin
+            // Filter only this tenant's employees using Attendance.adminId (direct field on record)
+            const tenantAttendance = allAttendance.filter(r =>
+                r.adminId?.toString() === tid
+            );
+
+            console.log(`[Report] Tenant "${tenantAdminName}" — ${tenantAttendance.length} records, sending to: ${recipients.map(r => r.email).join(', ')}`);
+
+            // Build Excel (even if 0 records — send empty sheet so admin knows no activity)
             const workbook = new ExcelJS.Workbook();
             const worksheet = workbook.addWorksheet(`Attendance_${dateLabel}`);
 
             worksheet.columns = [
-                { header: 'Employee ID', key: 'empId', width: 15 },
-                { header: 'Name', key: 'name', width: 25 },
-                { header: 'Department', key: 'dept', width: 20 },
-                { header: 'Check In', key: 'checkIn', width: 15 },
-                { header: 'Check Out', key: 'checkOut', width: 15 },
-                { header: 'Duration', key: 'duration', width: 12 },
-                { header: 'Status', key: 'status', width: 15 },
-                { header: 'OT Status', key: 'otStatus', width: 15 },
-                { header: 'OT In', key: 'otIn', width: 15 },
-                { header: 'OT Out', key: 'otOut', width: 15 },
+                { header: 'Employee ID',      key: 'empId',    width: 15 },
+                { header: 'Name',             key: 'name',     width: 25 },
+                { header: 'Department',       key: 'dept',     width: 20 },
+                { header: 'Check In',         key: 'checkIn',  width: 15 },
+                { header: 'Check Out',        key: 'checkOut', width: 15 },
+                { header: 'Duration',         key: 'duration', width: 12 },
+                { header: 'Status',           key: 'status',   width: 15 },
+                { header: 'OT Status',        key: 'otStatus', width: 15 },
+                { header: 'OT In',            key: 'otIn',     width: 15 },
+                { header: 'OT Out',           key: 'otOut',    width: 15 },
                 { header: 'OT Reject Reason', key: 'otReason', width: 30 },
             ];
 
-            adminAttendance.forEach(r => {
+            tenantAttendance.forEach(r => {
                 worksheet.addRow({
-                    empId: r.userId?.employeeId || 'N/A',
-                    name: r.userId?.name || 'Unknown',
-                    dept: r.userId?.department || 'N/A',
-                    checkIn: r.checkIn ? formatInTimeZone(r.checkIn, 'Asia/Karachi', 'hh:mm a') : '-',
+                    empId:    r.userId?.employeeId || 'N/A',
+                    name:     r.userId?.name       || 'Unknown',
+                    dept:     r.userId?.department || 'N/A',
+                    checkIn:  r.checkIn  ? formatInTimeZone(r.checkIn,  'Asia/Karachi', 'hh:mm a') : '-',
                     checkOut: r.checkOut ? formatInTimeZone(r.checkOut, 'Asia/Karachi', 'hh:mm a') : '-',
-                    duration: r.duration ? `${Math.floor(r.duration / 60)}h ${r.duration % 60}m` : '-',
-                    status: r.status,
+                    duration: r.duration ? `${Math.floor(r.duration / 60)}h ${r.duration % 60}m`   : '-',
+                    status:   r.status,
                     otStatus: r.overtimeStatus || 'None',
-                    otIn: r.overtimeIn ? formatInTimeZone(r.overtimeIn, 'Asia/Karachi', 'hh:mm a') : '-',
-                    otOut: r.overtimeOut ? formatInTimeZone(r.overtimeOut, 'Asia/Karachi', 'hh:mm a') : '-',
+                    otIn:     r.overtimeIn  ? formatInTimeZone(r.overtimeIn,  'Asia/Karachi', 'hh:mm a') : '-',
+                    otOut:    r.overtimeOut ? formatInTimeZone(r.overtimeOut, 'Asia/Karachi', 'hh:mm a') : '-',
                     otReason: r.overtimeRejectReason || '-',
                 });
             });
@@ -155,32 +216,28 @@ const sendDailyReport = async () => {
 
             const buffer = await workbook.xlsx.writeBuffer();
 
-            await transporter.sendMail({
-                from: `"HRMS Attendance System" <${process.env.EMAIL_USER}>`,
-                to: admin.email,
-                subject: `Daily Attendance Report - ${dateLabel} (6AM–6AM)`,
-                text: `Hello ${admin.name},\n\nPlease find attached the daily attendance report for your employees covering the 24-hour window from ${yesterdayStr} 6:00 AM to ${todayStr} 6:00 AM (PKT). Total records: ${adminAttendance.length}.\n\nRegards,\nHRMS Automation`,
-                attachments: [
-                    {
+            for (const recipient of recipients) {
+                await transporter.sendMail({
+                    from: `"HRMS Attendance System" <${process.env.EMAIL_USER}>`,
+                    to: recipient.email,
+                    subject: `Attendance Report - ${dateLabel}`,
+                    text: `Hello ${recipient.name},\n\nPlease find attached the attendance report for your employees.\n\nPeriod: ${windowLabel}\nTotal records: ${tenantAttendance.length}\n\nRegards,\nHRMS Automation`,
+                    attachments: [{
                         filename: `Attendance_Report_${dateLabel}.xlsx`,
                         content: buffer
-                    }
-                ]
-            });
-
-            sentCount++;
-            sentAdmins.push(`${admin.email} (${adminAttendance.length} records)`);
+                    }]
+                });
+                sentCount++;
+                sentLog.push(`${recipient.email} [${recipient.role}] — ${tenantAttendance.length} records`);
+                console.log(`[Report] Sent to ${recipient.email} [${recipient.role}] — ${tenantAttendance.length} records`);
+            }
         }
 
-        console.log(`[Cron] Daily report sent to ${sentCount} admin(s): ${sentAdmins.join(' | ')} | Window: ${yesterdayStr} 6AM → ${todayStr} 6AM`);
-        return {
-            success: true,
-            sentCount,
-            sentAdmins,
-            window: `${yesterdayStr} 06:00 AM PKT → ${todayStr} 06:00 AM PKT`
-        };
+        console.log(`[Report] Done. ${sentCount} email(s) sent: ${sentLog.join(' | ')}`);
+        return { success: true, sentCount, sentLog, window: windowLabel };
+
     } catch (error) {
-        console.error('[Cron Error] Failed to send daily report:', error);
+        console.error('[Report Error]', error);
         throw error;
     }
 };
