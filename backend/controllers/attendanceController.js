@@ -8,25 +8,45 @@ const { sendDailyReport } = require('../utils/reportCron');
 // @access  Private/Admin
 const triggerManualReport = async (req, res) => {
     try {
-        // Resolve the correct tenant root (Admin) ID
-        // - If logged in as Admin: req.user._id is the tenant root
-        // - If logged in as SuperAdmin: req.user.adminId is the tenant root
         let tenantId;
+
         if (req.user.role === 'Admin') {
+            // Admin is their own tenant root
             tenantId = req.user._id;
         } else if (req.user.role === 'SuperAdmin') {
-            tenantId = req.user.adminId;
-        } else {
-            return res.status(403).json({ message: 'Only Admin or SuperAdmin can trigger reports.' });
+            // SuperAdmin's adminId points to their tenant Admin
+            // If adminId is missing or points to themselves, find the Admin by looking up the user
+            if (req.user.adminId && req.user.adminId.toString() !== req.user._id.toString()) {
+                tenantId = req.user.adminId;
+            } else {
+                // Fallback: find Admin whose _id == adminId stored on this SuperAdmin's DB record
+                const freshUser = await User.findById(req.user._id).select('adminId role');
+                if (freshUser?.adminId) {
+                    tenantId = freshUser.adminId;
+                }
+            }
         }
 
         if (!tenantId) {
-            return res.status(400).json({ message: 'Could not resolve tenant — adminId missing on account.' });
+            return res.status(400).json({ message: 'Could not resolve tenant admin — check your account adminId.' });
+        }
+
+        // Verify the resolved tenantId actually belongs to an Admin
+        const tenantAdmin = await User.findOne({ _id: tenantId, role: 'Admin' });
+        if (!tenantAdmin) {
+            // tenantId itself might be the admin (e.g. admin whose adminId == their own _id)
+            const selfAdmin = await User.findOne({ _id: req.user._id, role: 'Admin' });
+            if (selfAdmin) {
+                tenantId = selfAdmin._id;
+            } else {
+                return res.status(400).json({ message: `No Admin found for tenant ID ${tenantId}. Cannot send report.` });
+            }
         }
 
         const result = await sendDailyReport(tenantId);
         res.json({ message: 'Daily report email triggered successfully', result });
     } catch (error) {
+        console.error('[triggerManualReport Error]', error);
         res.status(500).json({ message: 'Failed to send report', error: error.message });
     }
 };
