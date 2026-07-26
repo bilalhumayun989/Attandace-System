@@ -10,20 +10,18 @@ const triggerManualReport = async (req, res) => {
     try {
         let tenantId;
 
+        console.log(`[triggerManualReport] user._id=${req.user._id} role=${req.user.role} adminId=${req.user.adminId}`);
+
         if (req.user.role === 'Admin') {
-            // Admin is their own tenant root
+            // Admin is their own tenant root — adminId == their own _id
             tenantId = req.user._id;
         } else if (req.user.role === 'SuperAdmin') {
-            // SuperAdmin's adminId points to their tenant Admin
-            // If adminId is missing or points to themselves, find the Admin by looking up the user
             if (req.user.adminId && req.user.adminId.toString() !== req.user._id.toString()) {
                 tenantId = req.user.adminId;
             } else {
-                // Fallback: find Admin whose _id == adminId stored on this SuperAdmin's DB record
                 const freshUser = await User.findById(req.user._id).select('adminId role');
-                if (freshUser?.adminId) {
-                    tenantId = freshUser.adminId;
-                }
+                console.log(`[triggerManualReport] freshUser adminId=${freshUser?.adminId}`);
+                if (freshUser?.adminId) tenantId = freshUser.adminId;
             }
         }
 
@@ -31,16 +29,18 @@ const triggerManualReport = async (req, res) => {
             return res.status(400).json({ message: 'Could not resolve tenant admin — check your account adminId.' });
         }
 
-        // Verify the resolved tenantId actually belongs to an Admin
-        const tenantAdmin = await User.findOne({ _id: tenantId, role: 'Admin' });
+        console.log(`[triggerManualReport] resolved tenantId=${tenantId}`);
+
+        // Find the tenant Admin — role may be 'Admin' or 'SuperAdmin' acting as root
+        let tenantAdmin = await User.findOne({ _id: tenantId, role: 'Admin' });
         if (!tenantAdmin) {
-            // tenantId itself might be the admin (e.g. admin whose adminId == their own _id)
-            const selfAdmin = await User.findOne({ _id: req.user._id, role: 'Admin' });
-            if (selfAdmin) {
-                tenantId = selfAdmin._id;
-            } else {
-                return res.status(400).json({ message: `No Admin found for tenant ID ${tenantId}. Cannot send report.` });
+            // Edge case: this user IS the admin (adminId == _id) but query missed — try direct lookup
+            tenantAdmin = await User.findById(tenantId);
+            console.log(`[triggerManualReport] fallback lookup: found=${!!tenantAdmin} role=${tenantAdmin?.role}`);
+            if (!tenantAdmin || (tenantAdmin.role !== 'Admin' && tenantAdmin.role !== 'SuperAdmin')) {
+                return res.status(400).json({ message: `No Admin found for tenant ID ${tenantId}.` });
             }
+            tenantId = tenantAdmin._id;
         }
 
         const result = await sendDailyReport(tenantId);

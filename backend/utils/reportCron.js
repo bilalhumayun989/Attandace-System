@@ -87,13 +87,22 @@ const sendDailyReport = async (tenantId = null) => {
         }
 
         // --- FETCH ADMINS ---
-        const adminQuery = {
-            role: 'Admin',
-            status: { $ne: 'Deleted' },
-            ...(tenantId && { _id: tenantId })
-        };
-        const tenantAdmins = await User.find(adminQuery);
-        console.log(`[Report] Found ${tenantAdmins.length} admin tenant(s): ${tenantAdmins.map(a => `${a.name} (${a.email || 'NO EMAIL'})`).join(', ')}`);
+        // When tenantId provided: find that specific user regardless of role (Admin or SuperAdmin root)
+        // When no tenantId: fetch all tenant roots (role: Admin, adminId == own _id)
+        let tenantAdmins;
+        if (tenantId) {
+            const found = await User.findOne({
+                _id: tenantId,
+                status: { $ne: 'Deleted' }
+            });
+            tenantAdmins = found ? [found] : [];
+        } else {
+            tenantAdmins = await User.find({
+                role: 'Admin',
+                status: { $ne: 'Deleted' }
+            });
+        }
+        console.log(`[Report] Found ${tenantAdmins.length} admin tenant(s): ${tenantAdmins.map(a => `${a.name} <${a.email || 'NO EMAIL'}> role=${a.role}`).join(', ')}`);
 
         if (tenantAdmins.length === 0) {
             console.log('[Report] No active admin found for the given tenantId.');
