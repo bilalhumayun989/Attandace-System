@@ -78,58 +78,19 @@ const sendDailyReport = async () => {
             return { success: false, message: 'No active admins found to send report.' };
         }
 
-        // Fetch records whose date string falls in either day of the window
+        // Fetch all attendance records for the window, populate adminId too for per-admin filtering
         const rawAttendance = await Attendance.find({
             date: { $in: [yesterdayStr, todayStr] }
-        }).populate('userId', 'name employeeId department');
+        }).populate('userId', 'name employeeId department adminId');
 
-        // Keep only records where checkIn is within [windowStart, windowEnd)
-        // (records with no checkIn — e.g. absent — are included if their date == yesterdayStr)
-        const attendance = rawAttendance.filter(r => {
+        // Keep only records within the 6-to-6 window
+        // Absent records (no checkIn) are included if their date == yesterdayStr
+        const allAttendance = rawAttendance.filter(r => {
             if (r.checkIn) {
                 return r.checkIn >= windowStart && r.checkIn < windowEnd;
             }
             return r.date === yesterdayStr;
         });
-
-        const workbook = new ExcelJS.Workbook();
-        const worksheet = workbook.addWorksheet(`Attendance_${dateLabel}`);
-
-        worksheet.columns = [
-            { header: 'Employee ID', key: 'empId', width: 15 },
-            { header: 'Name', key: 'name', width: 25 },
-            { header: 'Department', key: 'dept', width: 20 },
-            { header: 'Check In', key: 'checkIn', width: 15 },
-            { header: 'Check Out', key: 'checkOut', width: 15 },
-            { header: 'Duration', key: 'duration', width: 12 },
-            { header: 'Status', key: 'status', width: 15 },
-            { header: 'OT Status', key: 'otStatus', width: 15 },
-            { header: 'OT In', key: 'otIn', width: 15 },
-            { header: 'OT Out', key: 'otOut', width: 15 },
-            { header: 'OT Reject Reason', key: 'otReason', width: 30 },
-        ];
-
-        attendance.forEach(r => {
-            worksheet.addRow({
-                empId: r.userId?.employeeId || 'N/A',
-                name: r.userId?.name || 'Unknown',
-                dept: r.userId?.department || 'N/A',
-                checkIn: r.checkIn ? formatInTimeZone(r.checkIn, 'Asia/Karachi', 'hh:mm a') : '-',
-                checkOut: r.checkOut ? formatInTimeZone(r.checkOut, 'Asia/Karachi', 'hh:mm a') : '-',
-                duration: r.duration ? `${Math.floor(r.duration / 60)}h ${r.duration % 60}m` : '-',
-                status: r.status,
-                otStatus: r.overtimeStatus || 'None',
-                otIn: r.overtimeIn ? formatInTimeZone(r.overtimeIn, 'Asia/Karachi', 'hh:mm a') : '-',
-                otOut: r.overtimeOut ? formatInTimeZone(r.overtimeOut, 'Asia/Karachi', 'hh:mm a') : '-',
-                otReason: r.overtimeRejectReason || '-',
-            });
-        });
-
-        // Styling
-        worksheet.getRow(1).font = { bold: true };
-        worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
-
-        const buffer = await workbook.xlsx.writeBuffer();
 
         const transporter = nodemailer.createTransport({
             service: 'gmail',
@@ -142,14 +103,63 @@ const sendDailyReport = async () => {
         let sentCount = 0;
         const sentAdmins = [];
 
+        // Each admin gets ONLY their own employees' attendance
         for (const admin of admins) {
             if (!admin.email) continue;
-            
+
+            const adminAttendance = allAttendance.filter(r =>
+                r.userId?.adminId?.toString() === admin._id.toString()
+            );
+
+            if (adminAttendance.length === 0) {
+                console.log(`[Cron] No records for admin ${admin.name} — skipping email.`);
+                continue;
+            }
+
+            // Build a separate Excel for this admin
+            const workbook = new ExcelJS.Workbook();
+            const worksheet = workbook.addWorksheet(`Attendance_${dateLabel}`);
+
+            worksheet.columns = [
+                { header: 'Employee ID', key: 'empId', width: 15 },
+                { header: 'Name', key: 'name', width: 25 },
+                { header: 'Department', key: 'dept', width: 20 },
+                { header: 'Check In', key: 'checkIn', width: 15 },
+                { header: 'Check Out', key: 'checkOut', width: 15 },
+                { header: 'Duration', key: 'duration', width: 12 },
+                { header: 'Status', key: 'status', width: 15 },
+                { header: 'OT Status', key: 'otStatus', width: 15 },
+                { header: 'OT In', key: 'otIn', width: 15 },
+                { header: 'OT Out', key: 'otOut', width: 15 },
+                { header: 'OT Reject Reason', key: 'otReason', width: 30 },
+            ];
+
+            adminAttendance.forEach(r => {
+                worksheet.addRow({
+                    empId: r.userId?.employeeId || 'N/A',
+                    name: r.userId?.name || 'Unknown',
+                    dept: r.userId?.department || 'N/A',
+                    checkIn: r.checkIn ? formatInTimeZone(r.checkIn, 'Asia/Karachi', 'hh:mm a') : '-',
+                    checkOut: r.checkOut ? formatInTimeZone(r.checkOut, 'Asia/Karachi', 'hh:mm a') : '-',
+                    duration: r.duration ? `${Math.floor(r.duration / 60)}h ${r.duration % 60}m` : '-',
+                    status: r.status,
+                    otStatus: r.overtimeStatus || 'None',
+                    otIn: r.overtimeIn ? formatInTimeZone(r.overtimeIn, 'Asia/Karachi', 'hh:mm a') : '-',
+                    otOut: r.overtimeOut ? formatInTimeZone(r.overtimeOut, 'Asia/Karachi', 'hh:mm a') : '-',
+                    otReason: r.overtimeRejectReason || '-',
+                });
+            });
+
+            worksheet.getRow(1).font = { bold: true };
+            worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
+
+            const buffer = await workbook.xlsx.writeBuffer();
+
             await transporter.sendMail({
                 from: `"HRMS Attendance System" <${process.env.EMAIL_USER}>`,
                 to: admin.email,
                 subject: `Daily Attendance Report - ${dateLabel} (6AM–6AM)`,
-                text: `Hello ${admin.name},\n\nPlease find attached the daily attendance report covering the 24-hour window from ${yesterdayStr} 6:00 AM to ${todayStr} 6:00 AM (PKT). This report includes details for Present, Absent, Short Hours, and Overtime status.\n\nRegards,\nHRMS Automation`,
+                text: `Hello ${admin.name},\n\nPlease find attached the daily attendance report for your employees covering the 24-hour window from ${yesterdayStr} 6:00 AM to ${todayStr} 6:00 AM (PKT). Total records: ${adminAttendance.length}.\n\nRegards,\nHRMS Automation`,
                 attachments: [
                     {
                         filename: `Attendance_Report_${dateLabel}.xlsx`,
@@ -157,17 +167,17 @@ const sendDailyReport = async () => {
                     }
                 ]
             });
+
             sentCount++;
-            sentAdmins.push(admin.email);
+            sentAdmins.push(`${admin.email} (${adminAttendance.length} records)`);
         }
 
-        console.log(`[Cron] Daily report successfully sent to ${sentCount} admin(s) (${sentAdmins.join(', ')}) for window ${yesterdayStr} 6AM → ${todayStr} 6AM`);
+        console.log(`[Cron] Daily report sent to ${sentCount} admin(s): ${sentAdmins.join(' | ')} | Window: ${yesterdayStr} 6AM → ${todayStr} 6AM`);
         return {
             success: true,
             sentCount,
             sentAdmins,
-            window: `${yesterdayStr} 06:00 AM PKT → ${todayStr} 06:00 AM PKT`,
-            recordsCount: attendance.length
+            window: `${yesterdayStr} 06:00 AM PKT → ${todayStr} 06:00 AM PKT`
         };
     } catch (error) {
         console.error('[Cron Error] Failed to send daily report:', error);
@@ -272,7 +282,7 @@ cron.schedule('*/5 * * * *', () => {
     timezone: "Asia/Karachi"
 });
 
-// Schedule to run every day at 6:00 AM Asia/Karachi time
+// Schedule to run every day at 6:00 AM PKT
 cron.schedule('0 6 * * *', () => {
     sendDailyReport();
 }, {
