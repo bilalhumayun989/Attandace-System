@@ -19,20 +19,18 @@ const runAutoCheckOut = async () => {
         const pktNow = getPKTTime();
         const twentyHoursAgo = new Date(pktNow.getTime() - (20 * 60 * 60 * 1000));
 
-        // Find all shifts where checkIn is older than 20 hours and checkOut is still null
+        // Only find shifts that are still open (not yet marked Absent) and older than 20 hours
         const openShifts = await Attendance.find({
             checkIn: { $ne: null, $lt: twentyHoursAgo },
-            checkOut: null
+            checkOut: null,
+            status: { $nin: ['Absent', 'On Leave'] } // skip already processed records
         });
 
         if (openShifts.length > 0) {
-            console.log(`[Cron] Found ${openShifts.length} open shifts older than 20 hours. Marking as Absent/Missed Checkout.`);
+            console.log(`[Cron] Found ${openShifts.length} open shifts older than 20 hours. Marking as Absent.`);
             for (const shift of openShifts) {
-                shift.status = 'Absent'; // Mark as absent
+                shift.status = 'Absent';
                 shift.isCheckingOut = false;
-                // Leave checkOut as null, or set it to checkIn? 
-                // The user requested: "his attendance marked as missed checked out and he marked as abent"
-                // Leaving checkOut as null and status as 'Absent' will cause payroll to see it as Missed Checkout/Absent.
                 await shift.save();
             }
         }
@@ -110,13 +108,14 @@ const sendDailyReport = async (tenantId = null) => {
         }
 
         // --- FETCH SUPERADMINS ---
-        const superAdminQuery = {
+        // Get all SuperAdmins whose adminId matches one of the tenant Admin _ids
+        const adminIds = tenantAdmins.map(a => a._id);
+        const superAdmins = await User.find({
             role: 'SuperAdmin',
             status: { $ne: 'Deleted' },
-            ...(tenantId && { adminId: tenantId })
-        };
-        const superAdmins = await User.find(superAdminQuery);
-        console.log(`[Report] Found ${superAdmins.length} SuperAdmin(s).`);
+            adminId: { $in: adminIds }
+        });
+        console.log(`[Report] Found ${superAdmins.length} SuperAdmin(s): ${superAdmins.map(s => `${s.name} <${s.email || 'NO EMAIL'}> adminId=${s.adminId}`).join(', ')}`);
 
         // --- BUILD TENANT MAP: tid → { recipients[], tenantAdminName } ---
         const tenantMap = {};
@@ -179,10 +178,12 @@ const sendDailyReport = async (tenantId = null) => {
                 continue;
             }
 
-            // Filter only this tenant's employees using Attendance.adminId (direct field on record)
-            const tenantAttendance = allAttendance.filter(r =>
-                r.adminId?.toString() === tid
-            );
+            // Filter only this tenant's employees
+            // Use r.adminId first (direct field), fall back to r.userId.adminId for older records
+            const tenantAttendance = allAttendance.filter(r => {
+                const recordTid = r.adminId?.toString() || r.userId?.adminId?.toString();
+                return recordTid === tid;
+            });
 
             console.log(`[Report] Tenant "${tenantAdminName}" — ${tenantAttendance.length} records, sending to: ${recipients.map(r => r.email).join(', ')}`);
 
