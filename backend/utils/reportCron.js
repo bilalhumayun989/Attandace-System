@@ -84,9 +84,8 @@ const sendDailyReport = async (tenantId = null) => {
             console.log(`[Report] Cron window: ${windowLabel}`);
         }
 
-        // --- FETCH ADMINS ---
-        // When tenantId provided: find that specific user regardless of role (Admin or SuperAdmin root)
-        // When no tenantId: fetch all tenant roots (role: Admin, adminId == own _id)
+        // --- FETCH TENANT ROOTS ---
+        // Both 'Admin' and 'SuperAdmin' can be tenant roots (owner accounts where adminId == own _id)
         let tenantAdmins;
         if (tenantId) {
             const found = await User.findOne({
@@ -95,27 +94,31 @@ const sendDailyReport = async (tenantId = null) => {
             });
             tenantAdmins = found ? [found] : [];
         } else {
-            tenantAdmins = await User.find({
-                role: 'Admin',
+            // Fetch all owner accounts — both Admin and SuperAdmin where adminId == their own _id
+            const allOwners = await User.find({
+                role: { $in: ['Admin', 'SuperAdmin'] },
                 status: { $ne: 'Deleted' }
             });
+            // Keep only those whose adminId equals their own _id (tenant root accounts)
+            tenantAdmins = allOwners.filter(u => u.adminId?.toString() === u._id.toString());
         }
-        console.log(`[Report] Found ${tenantAdmins.length} admin tenant(s): ${tenantAdmins.map(a => `${a.name} <${a.email || 'NO EMAIL'}> role=${a.role}`).join(', ')}`);
+        console.log(`[Report] Found ${tenantAdmins.length} tenant root(s): ${tenantAdmins.map(a => `${a.name} <${a.email || 'NO EMAIL'}> role=${a.role}`).join(', ')}`);
 
         if (tenantAdmins.length === 0) {
             console.log('[Report] No active admin found for the given tenantId.');
             return { success: false, message: 'No active admin found.' };
         }
 
-        // --- FETCH SUPERADMINS ---
-        // Get all SuperAdmins whose adminId matches one of the tenant Admin _ids
+        // --- FETCH SUB-SUPERADMINS ---
+        // These are SuperAdmins who are NOT tenant roots (adminId != own _id) — sub-accounts under a root
         const adminIds = tenantAdmins.map(a => a._id);
-        const superAdmins = await User.find({
+        const subSuperAdmins = await User.find({
             role: 'SuperAdmin',
             status: { $ne: 'Deleted' },
             adminId: { $in: adminIds }
-        });
-        console.log(`[Report] Found ${superAdmins.length} SuperAdmin(s): ${superAdmins.map(s => `${s.name} <${s.email || 'NO EMAIL'}> adminId=${s.adminId}`).join(', ')}`);
+        }).then(list => list.filter(u => u.adminId?.toString() !== u._id.toString()));
+
+        console.log(`[Report] Found ${subSuperAdmins.length} sub-SuperAdmin(s): ${subSuperAdmins.map(s => `${s.name} <${s.email || 'NO EMAIL'}>`).join(', ')}`);
 
         // --- BUILD TENANT MAP: tid → { recipients[], tenantAdminName } ---
         const tenantMap = {};
@@ -128,7 +131,7 @@ const sendDailyReport = async (tenantId = null) => {
                 console.log(`[Report] WARNING: Admin "${admin.name}" has no email — will not receive report.`);
             }
         }
-        for (const sa of superAdmins) {
+        for (const sa of subSuperAdmins) {
             const tid = sa.adminId?.toString();
             if (tid && tenantMap[tid] && sa.email) {
                 tenantMap[tid].recipients.push(sa);
