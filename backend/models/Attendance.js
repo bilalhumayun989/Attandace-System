@@ -4,6 +4,7 @@ const shiftSessionSchema = new mongoose.Schema({
     checkIn: { type: Date },
     checkOut: { type: Date },
     duration: { type: Number, default: 0 }, // in minutes
+    missed: { type: Boolean, default: false }, // true = employee checked in but never checked out
 }, { _id: false });
 
 const attendanceSchema = new mongoose.Schema(

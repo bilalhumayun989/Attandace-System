@@ -39,7 +39,18 @@ const AttendanceTracker = () => {
     
     const [selectedEmployeeId, setSelectedEmployeeId] = useState('All');
     const [allEmployees, setAllEmployees] = useState([]);
+    const [filterDepartment, setFilterDepartment] = useState('All');
     const { can } = usePermissions();
+
+    // Derive unique departments from attendance data, sorted A→Z
+    const departments = useMemo(() => {
+        const deptSet = new Set();
+        attendanceData.forEach(r => {
+            const dept = r.userId?.department;
+            if (dept && dept.trim()) deptSet.add(dept.trim());
+        });
+        return Array.from(deptSet).sort((a, b) => a.localeCompare(b));
+    }, [attendanceData]);
 
     // Date Filtering
     const now = new Date();
@@ -110,20 +121,31 @@ const AttendanceTracker = () => {
 
     // Filter Logic
     const filteredAttendance = useMemo(() => {
-        return attendanceData.filter(r => {
-            const [year, month, day] = r.date.split('-');
-            const matchesYear = year === filterYear;
-            const matchesMonth = filterMonth === 'All' || month === filterMonth;
-            const matchesDay = filterDay === 'All' || day === filterDay;
-            const matchesDate = matchesYear && matchesMonth && matchesDay;
-            const matchesSearch = (r.userId?.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-                                 (r.userId?.employeeId || '').toLowerCase().includes(searchTerm.toLowerCase());
-            const matchesStatus = statusFilter === 'All' || r.status === statusFilter;
-            const matchesEmployee = selectedEmployeeId === 'All' || r.userId?._id === selectedEmployeeId;
-            
-            return matchesDate && matchesSearch && matchesStatus && matchesEmployee;
-        });
-    }, [attendanceData, filterYear, filterMonth, filterDay, searchTerm, statusFilter, selectedEmployeeId]);
+        return attendanceData
+            .filter(r => {
+                const [year, month, day] = r.date.split('-');
+                const matchesYear = year === filterYear;
+                const matchesMonth = filterMonth === 'All' || month === filterMonth;
+                const matchesDay = filterDay === 'All' || day === filterDay;
+                const matchesDate = matchesYear && matchesMonth && matchesDay;
+                const matchesSearch = (r.userId?.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                                     (r.userId?.employeeId || '').toLowerCase().includes(searchTerm.toLowerCase());
+                const matchesStatus = statusFilter === 'All' || r.status === statusFilter;
+                const matchesEmployee = selectedEmployeeId === 'All' || r.userId?._id === selectedEmployeeId;
+                const matchesDepartment = filterDepartment === 'All' || (r.userId?.department || '').trim() === filterDepartment;
+
+                return matchesDate && matchesSearch && matchesStatus && matchesEmployee && matchesDepartment;
+            })
+            // Sort: department A→Z, then by date desc within each department
+            .sort((a, b) => {
+                const deptA = (a.userId?.department || '').trim().toLowerCase();
+                const deptB = (b.userId?.department || '').trim().toLowerCase();
+                if (deptA < deptB) return -1;
+                if (deptA > deptB) return 1;
+                // same dept → sort by date descending
+                return b.date.localeCompare(a.date);
+            });
+    }, [attendanceData, filterYear, filterMonth, filterDay, searchTerm, statusFilter, selectedEmployeeId, filterDepartment]);
 
     const stats = useMemo(() => {
         const onTime = filteredAttendance.filter(r => r.status === 'Present').length;
@@ -456,7 +478,7 @@ const AttendanceTracker = () => {
                                 onChange={(e) => setSearchTerm(e.target.value)}
                             />
                         </div>
-                        <div className="flex gap-2 w-full md:w-auto">
+                        <div className="flex flex-wrap gap-2 w-full md:w-auto">
                             <select
                                 className="h-10 w-full md:w-48 rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:ring-1 focus:ring-primary"
                                 value={selectedEmployeeId}
@@ -465,6 +487,17 @@ const AttendanceTracker = () => {
                                 <option value="All">All Employees</option>
                                 {employees.map(emp => (
                                     <option key={emp._id} value={emp._id}>{emp.name}{emp.employeeId ? ` (${emp.employeeId})` : ''}</option>
+                                ))}
+                            </select>
+                            {/* Department Filter */}
+                            <select
+                                className="h-10 w-full md:w-44 rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:ring-1 focus:ring-primary"
+                                value={filterDepartment}
+                                onChange={(e) => setFilterDepartment(e.target.value)}
+                            >
+                                <option value="All">All Departments</option>
+                                {departments.map(dept => (
+                                    <option key={dept} value={dept}>{dept}</option>
                                 ))}
                             </select>
                             <select
@@ -492,6 +525,7 @@ const AttendanceTracker = () => {
                                 <tr>
                                     <th className="px-6 py-4">Date</th>
                                     <th className="px-6 py-4">Employee</th>
+                                    <th className="px-6 py-4">Department</th>
                                     <th className="px-6 py-4">Check In</th>
                                     <th className="px-6 py-4">Check Out</th>
                                     <th className="px-6 py-4">Worked</th>
@@ -532,10 +566,20 @@ const AttendanceTracker = () => {
             >
                 {selectedRecord && (() => {
                     const hasShifts = selectedRecord.shifts && selectedRecord.shifts.length > 0;
+                    const firstCompletedShift = selectedRecord.shifts?.find(s => s.checkOut) || null;
                     const lastShift = hasShifts ? selectedRecord.shifts[selectedRecord.shifts.length - 1] : null;
-                    const displayCheckIn = lastShift ? lastShift.checkIn : selectedRecord.checkIn;
-                    const displayCheckOut = lastShift ? lastShift.checkOut : selectedRecord.checkOut;
-                    const isActive = selectedRecord.checkIn && !selectedRecord.checkOut;
+                    // Summary row shows the first completed shift (the one that counts)
+                    const displayCheckIn = firstCompletedShift ? firstCompletedShift.checkIn : selectedRecord.checkIn;
+                    const displayCheckOut = firstCompletedShift ? firstCompletedShift.checkOut : selectedRecord.checkOut;
+                    // isActive: only true when last shift is still open AND no prior shift completed
+                    const isActive = selectedRecord.checkIn && !selectedRecord.checkOut && !(lastShift && lastShift.checkOut);
+                    // Count only completed shift durations for the total
+                    const completedDuration = hasShifts
+                        ? selectedRecord.shifts.filter(s => s.checkOut && !s.missed).reduce((sum, s) => sum + (s.duration || 0), 0)
+                        : selectedRecord.duration;
+                    // Whether the last shift was missed (checked in, never checked out)
+                    const hasOpenMissedShift = lastShift && !lastShift.checkOut && !isActive;
+                    const hasMissedShift = hasShifts && selectedRecord.shifts.some(s => s.missed || (!s.checkOut && s !== lastShift));
 
                     return (
                     <div className="space-y-4">
@@ -552,18 +596,14 @@ const AttendanceTracker = () => {
                             )}
                         </div>
 
-                        {/* Summary row — shows last shift times */}
+                        {/* Summary row — shows first completed shift times */}
                         <div className="grid grid-cols-2 gap-4">
                             <div className="p-3 border rounded-lg">
-                                <p className="text-xs text-muted-foreground">
-                                    {hasShifts && selectedRecord.shifts.length > 1 ? 'Last Check In' : 'Check In'}
-                                </p>
+                                <p className="text-xs text-muted-foreground">Check In</p>
                                 <p className="font-bold">{format12h(displayCheckIn)}</p>
                             </div>
                             <div className="p-3 border rounded-lg">
-                                <p className="text-xs text-muted-foreground">
-                                    {hasShifts && selectedRecord.shifts.length > 1 ? 'Last Check Out' : 'Check Out'}
-                                </p>
+                                <p className="text-xs text-muted-foreground">Check Out</p>
                                 <p className="font-bold">
                                     {displayCheckOut
                                         ? format12h(displayCheckOut)
@@ -574,14 +614,14 @@ const AttendanceTracker = () => {
                             </div>
                         </div>
 
-                        {/* All shifts breakdown — only when multiple shifts exist */}
-                        {hasShifts && selectedRecord.shifts.length > 1 && (
+                        {/* Shifts breakdown — show whenever there are any shifts recorded */}
+                        {hasShifts && (
                             <div className="space-y-2 border-t border-border/40 pt-4">
                                 <p className="text-sm font-bold flex items-center gap-2">
                                     <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-primary text-[10px] font-bold">
                                         {selectedRecord.shifts.length}
                                     </span>
-                                    All Shifts
+                                    Shift Breakdown
                                 </p>
                                 <div className="rounded-lg border border-border/40 overflow-hidden">
                                     <table className="w-full text-sm">
@@ -591,30 +631,44 @@ const AttendanceTracker = () => {
                                                 <th className="px-3 py-2 text-left">Check In</th>
                                                 <th className="px-3 py-2 text-left">Check Out</th>
                                                 <th className="px-3 py-2 text-left">Duration</th>
+                                                <th className="px-3 py-2 text-left">Status</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-border/40">
-                                            {selectedRecord.shifts.map((shift, idx) => (
-                                                <tr key={idx} className="hover:bg-muted/20">
-                                                    <td className="px-3 py-2.5 text-muted-foreground font-medium">#{idx + 1}</td>
-                                                    <td className="px-3 py-2.5">{shift.checkIn ? format12h(shift.checkIn) : '--:--'}</td>
-                                                    <td className="px-3 py-2.5">
-                                                        {shift.checkOut
-                                                            ? format12h(shift.checkOut)
-                                                            : <span className="text-amber-500 font-medium">Active</span>}
-                                                    </td>
-                                                    <td className="px-3 py-2.5 text-muted-foreground">
-                                                        {shift.duration != null
-                                                            ? `${Math.floor(shift.duration / 60)}h ${shift.duration % 60}m`
-                                                            : '--'}
-                                                    </td>
-                                                </tr>
-                                            ))}
+                                            {selectedRecord.shifts.map((shift, idx) => {
+                                                const isMissed = shift.missed || (!shift.checkOut && !(selectedRecord.checkIn && !selectedRecord.checkOut && idx === selectedRecord.shifts.length - 1 && !firstCompletedShift));
+                                                const isThisActive = !shift.checkOut && !shift.missed && selectedRecord.checkIn && !selectedRecord.checkOut && idx === selectedRecord.shifts.length - 1;
+                                                return (
+                                                    <tr key={idx} className={`hover:bg-muted/20 ${shift.missed ? 'bg-rose-50/40' : ''}`}>
+                                                        <td className="px-3 py-2.5 text-muted-foreground font-medium">#{idx + 1}</td>
+                                                        <td className="px-3 py-2.5">{shift.checkIn ? format12h(shift.checkIn) : '--:--'}</td>
+                                                        <td className="px-3 py-2.5">
+                                                            {shift.checkOut
+                                                                ? format12h(shift.checkOut)
+                                                                : isThisActive
+                                                                    ? <span className="text-amber-500 font-medium">Active</span>
+                                                                    : <span className="text-rose-500 font-medium">—</span>}
+                                                        </td>
+                                                        <td className="px-3 py-2.5 text-muted-foreground">
+                                                            {shift.checkOut && shift.duration != null
+                                                                ? `${Math.floor(shift.duration / 60)}h ${shift.duration % 60}m`
+                                                                : <span className="text-muted-foreground/50">—</span>}
+                                                        </td>
+                                                        <td className="px-3 py-2.5">
+                                                            {shift.checkOut
+                                                                ? <Badge variant="success">Complete</Badge>
+                                                                : isThisActive
+                                                                    ? <Badge variant="warning">Active</Badge>
+                                                                    : <Badge variant="destructive">Missed Checkout</Badge>}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
                                         </tbody>
                                     </table>
                                 </div>
                                 <div className="flex justify-between items-center px-1 pt-1">
-                                    <span className="text-xs text-muted-foreground">Total worked</span>
+                                    <span className="text-xs text-muted-foreground">Total worked (completed shifts only)</span>
                                     <span className="text-sm font-bold text-primary">{calculateHours(selectedRecord.duration)}</span>
                                 </div>
                             </div>

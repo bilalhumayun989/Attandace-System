@@ -227,8 +227,17 @@ const checkIn = async (req, res) => {
             // Check if it's older than 20 hours
             const twentyHoursAgo = new Date(pktNow.getTime() - (20 * 60 * 60 * 1000));
             if (openShift.checkIn < twentyHoursAgo) {
-                // Auto-close as missed checkout/absent
-                openShift.status = 'Absent';
+                // Auto-close — preserve Present if a prior completed shift exists
+                const hasCompletedShifts = openShift.shifts && openShift.shifts.some(s => s.checkOut);
+                openShift.status = hasCompletedShifts ? 'Present' : 'Absent';
+                // Flag the open shift entry as missed
+                if (openShift.shifts && openShift.shifts.length > 0) {
+                    const lastEntry = openShift.shifts[openShift.shifts.length - 1];
+                    if (lastEntry && !lastEntry.checkOut) {
+                        lastEntry.missed = true;
+                    }
+                }
+                openShift.checkOut = openShift.checkIn; // close it so it's no longer open
                 await openShift.save();
             } else {
                 return res.status(400).json({ message: 'You have an ongoing shift. Please check out first.' });
@@ -254,6 +263,9 @@ const checkIn = async (req, res) => {
             attendance.checkIn = pktNow;
             attendance.checkOut = null; // Re-open the shift
             attendance.status = status;
+            // Push an open placeholder into shifts[] so the detail modal can show this shift immediately
+            if (!attendance.shifts) attendance.shifts = [];
+            attendance.shifts.push({ checkIn: pktNow, checkOut: null, duration: 0 });
         }
 
         await attendance.save();
@@ -288,7 +300,16 @@ const checkOut = async (req, res) => {
         // Check if it's older than 20 hours
         const twentyHoursAgo = new Date(pktNow.getTime() - (20 * 60 * 60 * 1000));
         if (attendance.checkIn < twentyHoursAgo) {
-            attendance.status = 'Absent'; // Missed checkout
+            // Preserve Present if a prior completed shift exists on this record
+            const hasCompletedShifts = attendance.shifts && attendance.shifts.some(s => s.checkOut);
+            attendance.status = hasCompletedShifts ? 'Present' : 'Absent';
+            // Flag the last open shift entry as missed
+            if (attendance.shifts && attendance.shifts.length > 0) {
+                const lastEntry = attendance.shifts[attendance.shifts.length - 1];
+                if (lastEntry && !lastEntry.checkOut) {
+                    lastEntry.missed = true;
+                }
+            }
             await attendance.save();
             return res.status(400).json({ message: 'Your previous shift expired after 20 hours. Please check in again.' });
         }
@@ -362,13 +383,21 @@ const checkOut = async (req, res) => {
             attendance.checkOut = effectiveCheckOut;
             attendance.duration = (attendance.duration || 0) + (durationMins > 0 ? durationMins : 0);
             attendance.status = 'Present';
-            // Record this session
+            // Update last open shift entry if it exists, otherwise push a new one
             if (!attendance.shifts) attendance.shifts = [];
-            attendance.shifts.push({
-                checkIn: checkInTime,
-                checkOut: effectiveCheckOut,
-                duration: durationMins > 0 ? durationMins : 0
-            });
+            const lastShiftEntry = attendance.shifts[attendance.shifts.length - 1];
+            if (lastShiftEntry && !lastShiftEntry.checkOut) {
+                lastShiftEntry.checkIn = checkInTime;
+                lastShiftEntry.checkOut = effectiveCheckOut;
+                lastShiftEntry.duration = durationMins > 0 ? durationMins : 0;
+                lastShiftEntry.missed = false;
+            } else {
+                attendance.shifts.push({
+                    checkIn: checkInTime,
+                    checkOut: effectiveCheckOut,
+                    duration: durationMins > 0 ? durationMins : 0
+                });
+            }
             await attendance.save();
         }
 

@@ -27,11 +27,24 @@ const runAutoCheckOut = async () => {
         });
 
         if (openShifts.length > 0) {
-            console.log(`[Cron] Found ${openShifts.length} open shifts older than 20 hours. Marking as Absent.`);
-            for (const shift of openShifts) {
-                shift.status = 'Absent';
-                shift.isCheckingOut = false;
-                await shift.save();
+            console.log(`[Cron] Found ${openShifts.length} open shifts older than 20 hours. Processing...`);
+            for (const record of openShifts) {
+                // Check if they had a completed shift earlier in the day
+                const hasCompletedShifts = record.shifts && record.shifts.some(s => s.checkOut);
+                record.status = hasCompletedShifts ? 'Present' : 'Absent';
+                
+                // Flag the last open shift entry as missed
+                if (record.shifts && record.shifts.length > 0) {
+                    const lastEntry = record.shifts[record.shifts.length - 1];
+                    if (lastEntry && !lastEntry.checkOut) {
+                        lastEntry.missed = true;
+                    }
+                }
+
+                // Close the open shift so it isn't picked up again
+                record.checkOut = record.checkIn; 
+                record.isCheckingOut = false;
+                await record.save();
             }
         }
     } catch (error) {
@@ -189,6 +202,18 @@ const sendDailyReport = async (tenantId = null) => {
             });
 
             console.log(`[Report] Tenant "${tenantAdminName}" — ${tenantAttendance.length} records, sending to: ${recipients.map(r => r.email).join(', ')}`);
+
+            // Sort by department A->Z, then by employee name A->Z
+            tenantAttendance.sort((a, b) => {
+                const deptA = (a.userId?.department || '').trim().toLowerCase();
+                const deptB = (b.userId?.department || '').trim().toLowerCase();
+                if (deptA < deptB) return -1;
+                if (deptA > deptB) return 1;
+                // Same department, sort by name
+                const nameA = (a.userId?.name || '').trim().toLowerCase();
+                const nameB = (b.userId?.name || '').trim().toLowerCase();
+                return nameA.localeCompare(nameB);
+            });
 
             // Build Excel (even if 0 records — send empty sheet so admin knows no activity)
             const workbook = new ExcelJS.Workbook();

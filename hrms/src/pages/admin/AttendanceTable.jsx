@@ -16,7 +16,7 @@ export const AttendanceTable = ({
     return (
       <>
         <tr>
-          <td colSpan={7} className="p-12 text-center text-muted-foreground">
+          <td colSpan={8} className="p-12 text-center text-muted-foreground">
             <div className="mx-auto animate-spin mb-2">Loading...</div>
           </td>
         </tr>
@@ -28,7 +28,7 @@ export const AttendanceTable = ({
     return (
       <>
         <tr>
-          <td colSpan={7} className="p-12 text-center text-muted-foreground">No matching records found.</td>
+          <td colSpan={8} className="p-12 text-center text-muted-foreground">No matching records found.</td>
         </tr>
       </>
     );
@@ -37,14 +37,16 @@ export const AttendanceTable = ({
   return (
     <>
       {filteredAttendance.map((record, index) => {
-        // Show the last shift's times on the summary row, fall back to top-level fields
+        // First completed shift — shown in the summary row (the shift that counts)
+        const firstCompletedShift = record.shifts?.find(s => s.checkOut) || null;
         const lastShift = record.shifts && record.shifts.length > 0
           ? record.shifts[record.shifts.length - 1]
           : null;
-        const displayCheckIn = lastShift ? lastShift.checkIn : record.checkIn;
-        const displayCheckOut = lastShift ? lastShift.checkOut : record.checkOut;
+        const displayCheckIn = firstCompletedShift ? firstCompletedShift.checkIn : record.checkIn;
+        const displayCheckOut = firstCompletedShift ? firstCompletedShift.checkOut : record.checkOut;
         const hasMultipleShifts = record.shifts && record.shifts.length > 1;
-        const isActive = record.checkIn && !record.checkOut;
+        // isActive only when the LAST shift has no checkout (open or missed) AND no prior shift was completed
+        const isActive = record.checkIn && !record.checkOut && !(lastShift && lastShift.checkOut);
 
         return (
           <tr key={record._id || index} className={`hover:bg-muted/30 transition-colors ${record.userId?.status === 'Deleted' ? 'line-through opacity-50 bg-muted/20' : ''}`}>
@@ -68,6 +70,11 @@ export const AttendanceTable = ({
                 </span>
                 <span className="text-xs text-muted-foreground">{record.userId?.employeeId}</span>
               </div>
+            </td>
+            <td className="px-6 py-4">
+              <span className="inline-block text-xs font-semibold px-2.5 py-1 rounded-full bg-primary/8 text-primary border border-primary/15">
+                {record.userId?.department || <span className="text-muted-foreground/50 font-normal">—</span>}
+              </span>
             </td>
             <td className="px-6 py-4 text-muted-foreground font-medium">{format12h(displayCheckIn)}</td>
             <td className="px-6 py-4 text-muted-foreground font-medium">
