@@ -64,6 +64,10 @@ const attendanceSchema = new mongoose.Schema(
             type: Boolean,
             default: false,
         },
+        isCustom: {
+            type: Boolean,
+            default: false,
+        },
         adminId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'User',

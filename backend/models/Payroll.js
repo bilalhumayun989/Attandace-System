@@ -17,6 +17,9 @@ const payrollSchema = new mongoose.Schema(
         calculationEndDate: {
             type: String, // YYYY-MM-DD
         },
+        generationDate: {
+            type: String, // YYYY-MM-DD
+        },
         salary: {
             type: Number,
             required: true,

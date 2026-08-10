@@ -17,6 +17,7 @@ const PayrollManagement = () => {
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [showDailyBreakdownId, setShowDailyBreakdownId] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
+    const [selectedGenerationDate, setSelectedGenerationDate] = useState('latest');
     const { can } = usePermissions();
 
     // Default to current month YYYY-MM
@@ -34,10 +35,22 @@ const PayrollManagement = () => {
     
     const departments = [...new Set(employees.map(e => e.department).filter(Boolean))];
 
+    // Extract unique generation dates from payrolls and sort descending (newest first)
+    const generationDates = [...new Set(payrolls.map(p => p.generationDate).filter(Boolean))]
+        .sort((a, b) => b.localeCompare(a));
+
     useEffect(() => {
+        setSelectedGenerationDate('latest'); // reset to auto-select on month change
         fetchPayrolls();
         fetchEmployees();
     }, [selectedMonth]);
+
+    // Auto-select the latest generation date when payrolls are loaded
+    useEffect(() => {
+        if (generationDates.length > 0 && selectedGenerationDate === 'latest') {
+            setSelectedGenerationDate(generationDates[0]);
+        }
+    }, [generationDates.join(',')]);
 
     const fetchEmployees = async () => {
         try {
@@ -221,6 +234,9 @@ const PayrollManagement = () => {
         const emp = p.userId;
         const matchEmployee = selectedEmployeeId === 'All' || emp?._id === selectedEmployeeId;
         const matchDepartment = selectedDepartment === 'All' || emp?.department === selectedDepartment;
+        const matchGenerationDate = !selectedGenerationDate || selectedGenerationDate === 'All'
+            ? true
+            : p.generationDate === selectedGenerationDate;
         
         let matchSearch = true;
         if (searchTerm) {
@@ -230,7 +246,7 @@ const PayrollManagement = () => {
             matchSearch = nameMatch || idMatch;
         }
 
-        return matchEmployee && matchDepartment && matchSearch;
+        return matchEmployee && matchDepartment && matchSearch && matchGenerationDate;
     });
 
     const toggleExpand = (id) => {
@@ -382,7 +398,7 @@ const PayrollManagement = () => {
                                 onChange={(e) => setSearchTerm(e.target.value)}
                             />
                         </div>
-                        <div className="flex gap-2 w-full md:w-auto">
+                        <div className="flex gap-2 w-full md:w-auto flex-wrap">
                             <select
                                 className="h-10 w-full md:w-48 rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:ring-1 focus:ring-primary"
                                 value={selectedEmployeeId}
@@ -403,6 +419,18 @@ const PayrollManagement = () => {
                                 <option value="All">All Departments</option>
                                 {departments.map(dept => (
                                     <option key={dept} value={dept}>{dept}</option>
+                                ))}
+                            </select>
+                            <select
+                                className="h-10 w-full md:w-52 rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:ring-1 focus:ring-primary"
+                                value={selectedGenerationDate}
+                                onChange={(e) => setSelectedGenerationDate(e.target.value)}
+                            >
+                                <option value="All">All Generation Dates</option>
+                                {generationDates.map(d => (
+                                    <option key={d} value={d}>
+                                        {d === generationDates[0] ? `📅 ${d} (Latest)` : `📅 ${d}`}
+                                    </option>
                                 ))}
                             </select>
                         </div>

@@ -328,8 +328,7 @@ const checkOut = async (req, res) => {
         if (checkInDateStr !== checkOutDateStr) {
             // Crosses midnight! Split the hours.
             // 1. Calculate time until midnight for the check-in day
-            const midnight = new Date(checkInTime);
-            midnight.setHours(23, 59, 59, 999);
+            const midnight = new Date(`${checkInDateStr}T23:59:59.999+05:00`);
             
             const durationMsDay1 = midnight - checkInTime;
             const durationMinsDay1 = Math.floor(durationMsDay1 / (1000 * 60));
@@ -347,8 +346,7 @@ const checkOut = async (req, res) => {
             await attendance.save();
 
             // 2. Calculate time from midnight to checkout for the next day
-            const nextDayStart = new Date(effectiveCheckOut);
-            nextDayStart.setHours(0, 0, 0, 0);
+            const nextDayStart = new Date(`${checkOutDateStr}T00:00:00.000+05:00`);
 
             const durationMsDay2 = effectiveCheckOut - nextDayStart;
             const durationMinsDay2 = Math.floor(durationMsDay2 / (1000 * 60));
@@ -489,8 +487,6 @@ const addCustomAttendance = async (req, res) => {
         const user = await User.findOne({ _id: userId, adminId: req.adminId });
         if (!user) return res.status(404).json({ message: 'User not found' });
 
-        let attendance = await Attendance.findOne({ userId, date });
-        
         // Parse time if provided
         let checkInDate = null;
         let checkOutDate = null;
@@ -499,32 +495,108 @@ const addCustomAttendance = async (req, res) => {
         }
         if (checkOut) {
             checkOutDate = new Date(`${date}T${checkOut}:00+05:00`);
+            // If checkout is strictly before checkIn, assume it rolled over to next day
+            if (checkInDate && checkOutDate < checkInDate) {
+                checkOutDate.setDate(checkOutDate.getDate() + 1);
+            }
         }
 
-        if (attendance) {
-            if (checkInDate) attendance.checkIn = checkInDate;
-            if (checkOutDate) attendance.checkOut = checkOutDate;
-            if (status) attendance.status = status;
+        if (!checkInDate) return res.status(400).json({ message: 'Check-in time is required' });
+
+        // Helper function to calculate total duration and boundaries from shifts
+        const recalculateAttendance = (att) => {
+            if (!att.shifts || att.shifts.length === 0) return;
+            // Sort shifts by checkIn
+            att.shifts.sort((a, b) => new Date(a.checkIn) - new Date(b.checkIn));
+            att.checkIn = att.shifts[0].checkIn;
+            const lastShift = att.shifts[att.shifts.length - 1];
+            att.checkOut = lastShift.checkOut || null;
+            
+            let totalMins = 0;
+            for (const s of att.shifts) {
+                if (s.checkIn && s.checkOut) {
+                    const dur = Math.floor((new Date(s.checkOut) - new Date(s.checkIn)) / (1000 * 60));
+                    s.duration = dur > 0 ? dur : 0;
+                    totalMins += s.duration;
+                }
+            }
+            att.duration = totalMins;
+        };
+
+        const checkInDateStr = getPKTDateString(checkInDate);
+        const checkOutDateStr = checkOutDate ? getPKTDateString(checkOutDate) : checkInDateStr;
+
+        let returnedAttendance;
+
+        if (checkOutDate && checkInDateStr !== checkOutDateStr) {
+            // Crosses midnight! Split the hours.
+            const midnight = new Date(`${checkInDateStr}T23:59:59.999+05:00`);
+            
+            const durationMsDay1 = midnight - checkInDate;
+            const durationMinsDay1 = Math.floor(durationMsDay1 / (1000 * 60));
+            
+            // DAY 1
+            let attendanceDay1 = await Attendance.findOne({ userId, date: checkInDateStr });
+            if (!attendanceDay1) {
+                attendanceDay1 = new Attendance({
+                    userId, adminId: req.adminId, date: checkInDateStr, status: status || 'Present', isCustom: true, shifts: []
+                });
+            }
+            if (!attendanceDay1.shifts) attendanceDay1.shifts = [];
+            attendanceDay1.shifts.push({ checkIn: checkInDate, checkOut: midnight, duration: durationMinsDay1 > 0 ? durationMinsDay1 : 0 });
+            attendanceDay1.isCustom = true;
+            if (status) attendanceDay1.status = status;
+            recalculateAttendance(attendanceDay1);
+            await attendanceDay1.save();
+
+            // DAY 2
+            const nextDayStart = new Date(`${checkOutDateStr}T00:00:00.000+05:00`);
+            
+            const durationMsDay2 = checkOutDate - nextDayStart;
+            const durationMinsDay2 = Math.floor(durationMsDay2 / (1000 * 60));
+
+            let attendanceDay2 = await Attendance.findOne({ userId, date: checkOutDateStr });
+            if (!attendanceDay2) {
+                attendanceDay2 = new Attendance({
+                    userId, adminId: req.adminId, date: checkOutDateStr, status: status || 'Present', isCustom: true, shifts: []
+                });
+            }
+            if (!attendanceDay2.shifts) attendanceDay2.shifts = [];
+            attendanceDay2.shifts.push({ checkIn: nextDayStart, checkOut: checkOutDate, duration: durationMinsDay2 > 0 ? durationMinsDay2 : 0 });
+            attendanceDay2.isCustom = true;
+            if (status) attendanceDay2.status = status;
+            recalculateAttendance(attendanceDay2);
+            await attendanceDay2.save();
+            
+            returnedAttendance = attendanceDay2; // return the last day's attendance
         } else {
-            attendance = new Attendance({
-                userId,
-                adminId: req.adminId,
-                date,
+            // Same Day (or no checkout yet)
+            let attendance = await Attendance.findOne({ userId, date: checkInDateStr });
+            if (!attendance) {
+                attendance = new Attendance({
+                    userId, adminId: req.adminId, date: checkInDateStr, status: status || 'Present', isCustom: true, shifts: []
+                });
+            }
+            if (!attendance.shifts) attendance.shifts = [];
+            
+            let durationMins = 0;
+            if (checkOutDate) {
+                durationMins = Math.floor((checkOutDate - checkInDate) / (1000 * 60));
+            }
+            attendance.shifts.push({
                 checkIn: checkInDate,
                 checkOut: checkOutDate,
-                status: status || 'Present'
+                duration: durationMins > 0 ? durationMins : 0
             });
+            
+            attendance.isCustom = true;
+            if (status) attendance.status = status;
+            recalculateAttendance(attendance);
+            await attendance.save();
+            returnedAttendance = attendance;
         }
 
-        if (attendance.checkIn && attendance.checkOut) {
-            const durationMs = attendance.checkOut - attendance.checkIn;
-            const totalDurationMins = Math.floor(durationMs / (1000 * 60));
-            attendance.duration = totalDurationMins > 0 ? totalDurationMins : 0;
-        }
-
-        await attendance.save();
-
-        res.status(201).json({ message: 'Attendance recorded successfully', attendance });
+        res.status(201).json({ message: 'Attendance recorded successfully', attendance: returnedAttendance });
     } catch (error) {
         res.status(500).json({ message: 'Server error', error: error.message });
     }
@@ -791,9 +863,19 @@ const faceCheckIn = async (req, res) => {
                 
                 openShift.checkOut = midnight;
                 openShift.duration = (openShift.duration || 0) + (durationMinsDay1 > 0 ? durationMinsDay1 : 0);
+                openShift.status = 'Present';
                 openShift.markedByFace = true;
                 if (!openShift.shifts) openShift.shifts = [];
-                openShift.shifts.push({ checkIn: checkInTime, checkOut: midnight, duration: durationMinsDay1 > 0 ? durationMinsDay1 : 0 });
+                // Update open placeholder if it exists, otherwise push
+                const lastFaceShift1 = openShift.shifts[openShift.shifts.length - 1];
+                if (lastFaceShift1 && !lastFaceShift1.checkOut) {
+                    lastFaceShift1.checkIn = checkInTime;
+                    lastFaceShift1.checkOut = midnight;
+                    lastFaceShift1.duration = durationMinsDay1 > 0 ? durationMinsDay1 : 0;
+                    lastFaceShift1.missed = false;
+                } else {
+                    openShift.shifts.push({ checkIn: checkInTime, checkOut: midnight, duration: durationMinsDay1 > 0 ? durationMinsDay1 : 0 });
+                }
                 await openShift.save();
 
                 const nextDayStart = new Date(effectiveCheckOut);
@@ -827,12 +909,22 @@ const faceCheckIn = async (req, res) => {
             } else {
                 // Same day checkout
                 openShift.checkOut = effectiveCheckOut;
+                openShift.status = 'Present';
                 openShift.markedByFace = true;
                 const regularDurationMs = Math.max(0, effectiveCheckOut - checkInTime);
                 const durationMins = Math.floor(regularDurationMs / (1000 * 60));
                 openShift.duration = (openShift.duration || 0) + (durationMins > 0 ? durationMins : 0);
                 if (!openShift.shifts) openShift.shifts = [];
-                openShift.shifts.push({ checkIn: checkInTime, checkOut: effectiveCheckOut, duration: durationMins > 0 ? durationMins : 0 });
+                // Update open placeholder if it exists, otherwise push
+                const lastFaceShift2 = openShift.shifts[openShift.shifts.length - 1];
+                if (lastFaceShift2 && !lastFaceShift2.checkOut) {
+                    lastFaceShift2.checkIn = checkInTime;
+                    lastFaceShift2.checkOut = effectiveCheckOut;
+                    lastFaceShift2.duration = durationMins > 0 ? durationMins : 0;
+                    lastFaceShift2.missed = false;
+                } else {
+                    openShift.shifts.push({ checkIn: checkInTime, checkOut: effectiveCheckOut, duration: durationMins > 0 ? durationMins : 0 });
+                }
                 await openShift.save();
             }
 

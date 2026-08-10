@@ -2,6 +2,7 @@ const Payroll = require('../models/Payroll');
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const { reconcileAttendance, reconcileMultipleUsersAttendance } = require('./attendanceController');
+const { formatInTimeZone } = require('date-fns-tz');
 
 // @desc    Generate/Calculate Payroll for a specific month
 // @route   POST /api/payroll/generate
@@ -14,6 +15,7 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
 
     const employees = await User.find(query);
     const payrolls = [];
+    const todayDateStr = formatInTimeZone(new Date(), 'Asia/Karachi', 'yyyy-MM-dd');
 
     // 1. Determine Date Range for the Cycle
     let startDate, endDate;
@@ -30,16 +32,16 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
 
         if (cycle === 15 || cycle === '15') {
             // Cycle 15: 1st of Current Month -> 15th of Current Month
-            startDate = new Date(reqYear, reqMonth - 1, 1);
-            endDate = new Date(reqYear, reqMonth - 1, 15);
+            startDate = new Date(reqYear, reqMonth - 1, 1, 12, 0, 0);
+            endDate = new Date(reqYear, reqMonth - 1, 15, 12, 0, 0);
         } else if (cycle === 31 || cycle === '31') {
             // Cycle 31: 16th of Current Month -> End of Current Month
-            startDate = new Date(reqYear, reqMonth - 1, 16);
-            endDate = new Date(reqYear, reqMonth, 0);
+            startDate = new Date(reqYear, reqMonth - 1, 16, 12, 0, 0);
+            endDate = new Date(reqYear, reqMonth, 0, 12, 0, 0);
         } else {
             // Default Full Month
-            startDate = new Date(reqYear, reqMonth - 1, 1);
-            endDate = new Date(reqYear, reqMonth - 1, daysInMonth);
+            startDate = new Date(reqYear, reqMonth - 1, 1, 12, 0, 0);
+            endDate = new Date(reqYear, reqMonth - 1, daysInMonth, 12, 0, 0);
 
             const today = new Date();
             if (today.getFullYear() === reqYear && (today.getMonth() + 1) === reqMonth) {
@@ -50,11 +52,13 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
         }
     }
 
-    // Cap the endDate to today so we don't penalize future days if generated early
-    const currentToday = new Date();
-    currentToday.setHours(0, 0, 0, 0);
-    if (endDate > currentToday) {
-        endDate = new Date(currentToday);
+    // Cap the endDate to today only if it's not an explicit cycle, so we don't penalize future days if generated early
+    if (!cycle && !customStart) {
+        const currentToday = new Date();
+        currentToday.setHours(0, 0, 0, 0);
+        if (endDate > currentToday) {
+            endDate = new Date(currentToday);
+        }
     }
 
     if (startDate > endDate) {
@@ -124,6 +128,7 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
 
             // date field is stored as plain "YYYY-MM-DD" string — direct match is safest
             const record = attendanceRecords.find(r => r.date === dateString);
+            const labelSuffix = (record && record.isCustom) ? ' (CA)' : '';
             // Custom handling for dates before employee join date
             if (isBeforeJoin) {
                 // If admin added attendance before join, count as present; else absent.
@@ -150,7 +155,7 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
 
                     dailyBreakdown.push({
                         date: dateString,
-                        status: dayPayLabel,
+                        status: dayPayLabel + labelSuffix,
                         workMinutes: baseMinutes,
                         baseDaySalary: Math.round(dayEarnedSalary - (worked > 11 * 60 ? overtimePay : 0)),
                         overtimePay: worked > 11 * 60 ? Math.round(overtimePay) : 0,
@@ -217,7 +222,7 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                 totalEarnedSalary += dayEarnedSalary;
                 dailyBreakdown.push({
                     date: dateString,
-                    status: dayPayLabel,
+                    status: dayPayLabel + labelSuffix,
                     workMinutes: baseMinutes,
                     baseDaySalary: Math.round(dayEarnedSalary - (record?.duration > 11 * 60 ? overtimePay : 0)),
                     overtimePay: record?.duration > 11 * 60 ? Math.round(overtimePay) : 0,
@@ -235,7 +240,7 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
 
                 dailyBreakdown.push({
                     date: dateString,
-                    status: 'On Leave',
+                    status: 'On Leave' + labelSuffix,
                     workMinutes: 0,
                     baseDaySalary: Math.round(perDaySalary),
                     overtimePay: 0,
@@ -260,7 +265,7 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                 }
                 dailyBreakdown.push({
                     date: dateString,
-                    status: isPaidLeave ? 'Paid Leave' : 'Absent',
+                    status: (isPaidLeave ? 'Paid Leave' : 'Absent') + labelSuffix,
                     workMinutes: 0,
                     baseDaySalary: isPaidLeave ? Math.round(perDaySalary) : 0,
                     overtimePay: 0,
@@ -325,7 +330,7 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
 
             dailyBreakdown.push({
                 date: dateString,
-                status: dayPayLabel,
+                status: dayPayLabel + labelSuffix,
                 workMinutes: baseMinutes,
                 baseDaySalary: Math.round(dayEarnedSalary - (baseMinutes > 11 * 60 ? overtimePay : 0)),
                 overtimePay: baseMinutes > 11 * 60 ? Math.round(overtimePay) : 0,
@@ -362,13 +367,15 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
             },
             dailyBreakdown: dailyBreakdown,
             netSalary: netSalary,
-            status: 'Pending'
+            status: 'Pending',
+            generationDate: todayDateStr
         };
 
         const existingPayroll = await Payroll.findOne({
             userId: user._id,
             month: payrollData.month,
-            adminId: adminId
+            adminId: adminId,
+            generationDate: todayDateStr
         });
 
         if (existingPayroll) {
