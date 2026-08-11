@@ -70,6 +70,7 @@ app.use('/api/attendance', require('./routes/attendanceRoutes'));
 app.use('/api/payroll', require('./routes/payrollRoutes'));
 app.use('/api/admin-leave', require('./routes/leaveRoutes'));
 app.use('/api/cron', require('./routes/cronRoutes'));
+app.use('/api/expenses', require('./routes/expenseRoutes'));
 
 
 // Basic route
