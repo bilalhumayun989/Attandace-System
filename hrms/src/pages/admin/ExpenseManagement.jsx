@@ -12,6 +12,15 @@ import {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 const fmt = (n) => new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', minimumFractionDigits: 0 }).format(n || 0);
+
+// Compact format for small cards: Rs 23,000 → Rs 23K, Rs 1,150 → Rs 1.1K
+const fmtCompact = (n) => {
+    const v = n || 0;
+    if (v >= 1000000) return `Rs ${(v / 1000000).toFixed(1).replace(/\.0$/, '')}M`;
+    if (v >= 1000)    return `Rs ${(v / 1000).toFixed(1).replace(/\.0$/, '')}K`;
+    return `Rs ${v}`;
+};
+
 const getCurrentMonth = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; };
 
 const TYPE_META = {
@@ -25,11 +34,13 @@ const TYPE_META = {
 const PERIOD_LABELS = { '1-15': '1st – 15th', '16-end': '16th – End of Month', 'full-month': 'Full Month' };
 
 // ─── Summary Card ────────────────────────────────────────────────────────────
-const SummaryCard = ({ label, amount, sub, color = 'text-slate-800', small = false }) => (
-    <div className="bg-white rounded-2xl border border-slate-200 p-3 sm:p-4 flex flex-col gap-1 shadow-sm min-w-0">
-        <span className="text-[10px] sm:text-xs font-semibold text-slate-400 uppercase tracking-wider truncate">{label}</span>
-        <span className={`text-base sm:text-lg font-black ${color} truncate`}>{fmt(amount)}</span>
-        {sub && <span className="text-[10px] sm:text-xs text-slate-400 truncate">{sub}</span>}
+const SummaryCard = ({ label, amount, sub, color = 'text-slate-800' }) => (
+    <div className="bg-white rounded-2xl border border-slate-200 p-3 sm:p-4 flex flex-col gap-1 shadow-sm">
+        <span className="text-[10px] sm:text-xs font-semibold text-slate-400 uppercase tracking-wider leading-tight">{label}</span>
+        {/* Compact on mobile, full amount on sm+ */}
+        <span className={`text-sm font-black sm:hidden ${color}`}>{fmtCompact(amount)}</span>
+        <span className={`text-lg font-black hidden sm:block ${color}`}>{fmt(amount)}</span>
+        {sub && <span className="text-[10px] sm:text-xs text-slate-400 leading-tight">{sub}</span>}
     </div>
 );
 
@@ -215,17 +226,17 @@ const ExpenseManagement = ({ employees = [] }) => {
 
                     {/* Summary grid — 2 cols mobile → 4 cols tablet → 7 cols desktop */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 sm:gap-3">
-                        <SummaryCard label="Base Salary"    amount={summary.baseSalary}           color="text-slate-800"   small />
-                        <SummaryCard label="Curr. Earned"   amount={summary.currentEarnedSalary}
+                        <SummaryCard label="Base Salary"   amount={summary.baseSalary}           color="text-slate-800"  />
+                        <SummaryCard label="Curr. Earned"  amount={summary.currentEarnedSalary}
                             sub={`${summary.presentDays ?? '—'} days`}
-                            color="text-indigo-600" small />
-                        <SummaryCard label="Advance"        amount={summary.totalAdvance}          color="text-blue-600"    small />
-                        <SummaryCard label="Deductions"     amount={summary.totalDeductions}       color="text-rose-600"    small />
-                        <SummaryCard label="Bonus Paid"     amount={summary.totalBonusPaid}        color="text-amber-600"   small />
-                        <SummaryCard label="Net Payable"    amount={summary.netPayable}            color="text-primary"     small />
-                        <SummaryCard label="Remaining"      amount={summary.remainingBalance}
+                            color="text-indigo-600" />
+                        <SummaryCard label="Advance"       amount={summary.totalAdvance}          color="text-blue-600"   />
+                        <SummaryCard label="Deductions"    amount={summary.totalDeductions}       color="text-rose-600"   />
+                        <SummaryCard label="Bonus Paid"    amount={summary.totalBonusPaid}        color="text-amber-600"  />
+                        <SummaryCard label="Effective"     amount={summary.netPayable}            color="text-primary"    />
+                        <SummaryCard label="Remaining"     amount={summary.remainingBalance}
                             color={summary.remainingBalance > 0 ? 'text-emerald-600' : 'text-slate-400'}
-                            sub={summary.remainingBalance === 0 ? 'Fully paid' : 'Still due'} small />
+                            sub={summary.remainingBalance === 0 ? 'Fully paid' : 'Still due'} />
                     </div>
 
                     {/* Action buttons — 2 cols mobile → 5 cols desktop */}
@@ -414,19 +425,44 @@ const ExpenseManagement = ({ employees = [] }) => {
             <Modal isOpen={modal === 'deduction'} onClose={closeModal} title="Add Deduction"
                 footer={<>
                     <Button variant="outline" onClick={closeModal}>Cancel</Button>
-                    <Button onClick={handleSubmit} disabled={actionLoading || !amount} className="bg-rose-600 hover:bg-rose-700 text-white">
+                    <Button onClick={handleSubmit}
+                        disabled={actionLoading || !amount || Number(amount) <= 0 || Number(amount) > (summary?.remainingBalance || 0)}
+                        className="bg-rose-600 hover:bg-rose-700 text-white">
                         {actionLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <TrendingDown className="h-4 w-4 mr-2" />} Apply Deduction
                     </Button>
                 </>}>
                 <div className="space-y-4">
+                    {/* Current balance info */}
+                    <div className="grid grid-cols-2 gap-3">
+                        <div className="bg-slate-50 rounded-xl p-3 text-center">
+                            <p className="text-xs text-slate-500 font-semibold uppercase tracking-wide">Base Salary</p>
+                            <p className="text-xl font-black text-slate-700">{fmt(summary?.baseSalary)}</p>
+                        </div>
+                        <div className="bg-emerald-50 rounded-xl p-3 text-center">
+                            <p className="text-xs text-emerald-600 font-semibold uppercase tracking-wide">Remaining</p>
+                            <p className="text-xl font-black text-emerald-700">{fmt(summary?.remainingBalance)}</p>
+                        </div>
+                    </div>
+                    {summary?.fullSalaryPaid && (
+                        <div className="flex items-center gap-2 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl px-3 py-2 text-xs font-medium">
+                            <AlertCircle className="h-4 w-4 shrink-0" /> Full salary already paid — deductions cannot be added this month.
+                        </div>
+                    )}
                     <div>
                         <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5 block">Deduction Amount (PKR)</label>
-                        <Input type="number" min="1" value={amount} onChange={e => setAmount(e.target.value)} placeholder="e.g. 5000" />
+                        <Input type="number" min="1" max={summary?.remainingBalance}
+                            disabled={summary?.fullSalaryPaid}
+                            value={amount} onChange={e => setAmount(e.target.value)} placeholder="e.g. 5000" />
                     </div>
-                    {amount > 0 && (
+                    {Number(amount) > 0 && Number(amount) <= (summary?.remainingBalance || 0) && (
                         <div className="bg-rose-50 rounded-xl p-3 text-center">
-                            <p className="text-xs text-rose-500">Remaining after deduction</p>
-                            <p className="text-xl font-black text-rose-700">{fmt(Math.max(0, (summary?.netPayable || 0) - Number(amount)))}</p>
+                            <p className="text-xs text-rose-500 font-medium">Effective salary after deduction</p>
+                            <p className="text-xl font-black text-rose-700">{fmt(Math.max(0, (summary?.baseSalary || 0) - (summary?.totalDeductions || 0) - Number(amount) + (summary?.totalBonusPaid || 0)))}</p>
+                        </div>
+                    )}
+                    {Number(amount) > (summary?.remainingBalance || 0) && Number(amount) > 0 && (
+                        <div className="flex items-center gap-2 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl px-3 py-2 text-xs font-medium">
+                            <AlertCircle className="h-4 w-4 shrink-0" /> Cannot exceed remaining salary of {fmt(summary?.remainingBalance)}.
                         </div>
                     )}
                     <div>
@@ -476,18 +512,33 @@ const ExpenseManagement = ({ employees = [] }) => {
             <Modal isOpen={modal === 'custom'} onClose={closeModal} title="Custom Payment"
                 footer={<>
                     <Button variant="outline" onClick={closeModal}>Cancel</Button>
-                    <Button onClick={handleSubmit} disabled={actionLoading || !amount} className="bg-purple-600 hover:bg-purple-700 text-white">
+                    <Button onClick={handleSubmit}
+                        disabled={actionLoading || !amount || Number(amount) <= 0 || Number(amount) > (summary?.remainingBalance || 0)}
+                        className="bg-purple-600 hover:bg-purple-700 text-white">
                         {actionLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Wallet className="h-4 w-4 mr-2" />} Record Payment
                     </Button>
                 </>}>
                 <div className="space-y-4">
+                    <div className="bg-purple-50 rounded-xl p-3 flex items-center justify-between">
+                        <span className="text-xs font-semibold text-purple-600 uppercase tracking-wide">Remaining Balance</span>
+                        <span className="text-xl font-black text-purple-700">{fmt(summary?.remainingBalance)}</span>
+                    </div>
                     <div>
                         <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5 block">Amount (PKR)</label>
-                        <Input type="number" min="1" value={amount} onChange={e => setAmount(e.target.value)} placeholder="e.g. 3000" />
+                        <Input type="number" min="1" max={summary?.remainingBalance}
+                            value={amount} onChange={e => setAmount(e.target.value)} placeholder={`Max: ${fmt(summary?.remainingBalance)}`} />
                     </div>
-                    <div className="bg-purple-50 rounded-xl p-3 text-xs text-purple-600 font-medium">
-                        This amount will be recorded separately. The remaining payable salary will continue to show correctly in payroll.
-                    </div>
+                    {Number(amount) > (summary?.remainingBalance || 0) && Number(amount) > 0 && (
+                        <div className="flex items-center gap-2 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl px-3 py-2 text-xs font-medium">
+                            <AlertCircle className="h-4 w-4 shrink-0" /> Cannot exceed remaining balance of {fmt(summary?.remainingBalance)}.
+                        </div>
+                    )}
+                    {Number(amount) > 0 && Number(amount) <= (summary?.remainingBalance || 0) && (
+                        <div className="bg-slate-50 rounded-xl p-3 flex items-center justify-between">
+                            <span className="text-xs text-slate-500 font-medium">Balance after payment</span>
+                            <span className="text-base font-black text-slate-700">{fmt(Math.max(0, (summary?.remainingBalance || 0) - Number(amount)))}</span>
+                        </div>
+                    )}
                     <div>
                         <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5 block">Note (optional)</label>
                         <Input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Emergency payment" />

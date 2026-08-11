@@ -17,15 +17,14 @@ const getCurrentMonth = () => {
 
 /**
  * Compute salary summary for an employee in a given month.
- * Aggregates all expenses for that month to show:
- *  - baseSalary        : employee's configured salary
- *  - totalAdvance      : total advance paid
- *  - totalDeductions   : sum of deduction entries
- *  - totalBonusPaid    : bonuses with status Paid
- *  - totalBonusPending : bonuses still pending
- *  - totalCustom       : custom payments made
- *  - netPayable        : baseSalary - totalAdvance - totalDeductions + totalBonusPaid - totalCustom
- *  - remainingBalance  : netPayable remaining after all paid amounts
+ *
+ * Logic:
+ *  - baseSalary     : employee's configured monthly salary
+ *  - totalDeductions: sum of all deduction entries  → reduces effective salary
+ *  - totalBonusPaid : sum of paid bonuses           → adds to effective salary
+ *  - effectiveSalary: baseSalary - totalDeductions + totalBonusPaid  (floor 0)
+ *  - totalPaid      : advance + custom + full_salary payments already made
+ *  - remainingBalance: effectiveSalary - totalPaid  (floor 0)
  */
 const computeSummary = async (userId, month) => {
     const user = await User.findById(userId).select('salary name employeeId department');
@@ -42,12 +41,14 @@ const computeSummary = async (userId, month) => {
     let totalBonusPending = 0;
     let totalCustom       = 0;
     let fullSalaryPaid    = false;
+    let fullSalaryAmount  = 0;
     let advancedPeriods   = [];
 
     for (const e of expenses) {
         switch (e.type) {
             case 'full_salary':
-                fullSalaryPaid = true;
+                fullSalaryPaid   = true;
+                fullSalaryAmount = e.amount;
                 break;
             case 'advance':
                 totalAdvance += e.amount;
@@ -66,23 +67,29 @@ const computeSummary = async (userId, month) => {
         }
     }
 
-    const netPayable = Math.max(0,
-        baseSalary - totalAdvance - totalDeductions + totalBonusPaid
-    );
-    const totalPaid = totalAdvance + totalCustom + (fullSalaryPaid ? baseSalary : 0);
-    const remainingBalance = Math.max(0, netPayable - totalPaid);
+    // Effective salary = base − deductions + paid bonuses (never below 0)
+    const effectiveSalary = Math.max(0, baseSalary - totalDeductions + totalBonusPaid);
+
+    // Total already paid out this month
+    const totalPaid = totalAdvance + totalCustom + fullSalaryAmount;
+
+    // What's still owed
+    const remainingBalance = Math.max(0, effectiveSalary - totalPaid);
 
     return {
         user,
         baseSalary,
+        effectiveSalary,
         totalAdvance,
         totalDeductions,
         totalBonusPaid,
         totalBonusPending,
         totalCustom,
         fullSalaryPaid,
+        fullSalaryAmount,
         advancedPeriods,
-        netPayable,
+        // Keep netPayable as alias for effectiveSalary for backward compat
+        netPayable: effectiveSalary,
         totalPaid,
         remainingBalance,
         expenses,
@@ -281,7 +288,7 @@ const addDeduction = async (req, res) => {
         const { userId, amount, month, note } = req.body;
         const targetMonth = month || getCurrentMonth();
 
-        if (!amount || amount <= 0) {
+        if (!amount || Number(amount) <= 0) {
             return res.status(400).json({ message: 'Amount must be greater than 0.' });
         }
 
@@ -289,6 +296,20 @@ const addDeduction = async (req, res) => {
         if (!user) return res.status(404).json({ message: 'Employee not found.' });
         if (user.adminId?.toString() !== req.adminId?.toString()) {
             return res.status(403).json({ message: 'Access denied.' });
+        }
+
+        // Block if full salary already paid for this month
+        const salaryPaid = await Expense.findOne({ userId, month: targetMonth, type: 'full_salary' });
+        if (salaryPaid) {
+            return res.status(400).json({ message: 'Cannot add deduction — full salary has already been paid for this month.' });
+        }
+
+        // Block if deduction exceeds remaining balance
+        const current = await computeSummary(userId, targetMonth);
+        if (Number(amount) > current.remainingBalance) {
+            return res.status(400).json({
+                message: `Deduction (Rs ${amount}) exceeds the remaining salary (Rs ${current.remainingBalance}) for this month.`
+            });
         }
 
         const expense = await Expense.create({
@@ -367,7 +388,7 @@ const addCustomPayment = async (req, res) => {
         const { userId, amount, month, note } = req.body;
         const targetMonth = month || getCurrentMonth();
 
-        if (!amount || amount <= 0) {
+        if (!amount || Number(amount) <= 0) {
             return res.status(400).json({ message: 'Amount must be greater than 0.' });
         }
 
@@ -375,6 +396,14 @@ const addCustomPayment = async (req, res) => {
         if (!user) return res.status(404).json({ message: 'Employee not found.' });
         if (user.adminId?.toString() !== req.adminId?.toString()) {
             return res.status(403).json({ message: 'Access denied.' });
+        }
+
+        // Block if custom payment exceeds remaining balance
+        const current = await computeSummary(userId, targetMonth);
+        if (Number(amount) > current.remainingBalance) {
+            return res.status(400).json({
+                message: `Payment (Rs ${amount}) exceeds the remaining salary balance (Rs ${current.remainingBalance}) for this month.`
+            });
         }
 
         const expense = await Expense.create({
@@ -420,7 +449,16 @@ const payPendingBonus = async (req, res) => {
         await expense.save();
 
         const summary = await computeSummary(expense.userId, expense.month);
-        res.json({ message: 'Bonus paid.', expense, summary });
+
+        // Attach live earned salary so UI refreshes correctly without reload
+        let currentEarnedSalary = 0, presentDays = 0, workingDays = 0;
+        try {
+            const payrolls = await generatePayrollService(req.adminId, expense.month, null);
+            const emp = payrolls.find(p => p.userId?.toString() === expense.userId?.toString());
+            if (emp) { currentEarnedSalary = emp.netSalary || 0; presentDays = emp.presentDays || 0; workingDays = emp.workingDays || 0; }
+        } catch {}
+
+        res.json({ message: 'Bonus paid.', expense, summary: { ...summary, currentEarnedSalary, presentDays, workingDays } });
     } catch (err) {
         console.error('[Expense] payPendingBonus error:', err);
         res.status(500).json({ message: 'Server error', error: err.message });
@@ -439,9 +477,20 @@ const deleteExpense = async (req, res) => {
             return res.status(403).json({ message: 'Access denied.' });
         }
 
+        const { userId, month: expMonth } = expense;
         await expense.deleteOne();
-        const summary = await computeSummary(expense.userId, expense.month);
-        res.json({ message: 'Expense deleted.', summary });
+
+        const summary = await computeSummary(userId, expMonth);
+
+        // Attach live earned salary so UI refreshes correctly without reload
+        let currentEarnedSalary = 0, presentDays = 0, workingDays = 0;
+        try {
+            const payrolls = await generatePayrollService(req.adminId, expMonth, null);
+            const emp = payrolls.find(p => p.userId?.toString() === userId?.toString());
+            if (emp) { currentEarnedSalary = emp.netSalary || 0; presentDays = emp.presentDays || 0; workingDays = emp.workingDays || 0; }
+        } catch {}
+
+        res.json({ message: 'Expense deleted.', summary: { ...summary, currentEarnedSalary, presentDays, workingDays } });
     } catch (err) {
         console.error('[Expense] deleteExpense error:', err);
         res.status(500).json({ message: 'Server error', error: err.message });
