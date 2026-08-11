@@ -1,6 +1,7 @@
 const Expense = require('../models/Expense');
 const User = require('../models/User');
 const Payroll = require('../models/Payroll');
+const { generatePayrollService } = require('./payrollController');
 
 // ─── HELPERS ────────────────────────────────────────────────────────────────
 
@@ -107,7 +108,24 @@ const getEmployeeSummary = async (req, res) => {
             return res.status(403).json({ message: 'Access denied.' });
         }
 
-        res.json(summary);
+        // Calculate live earned salary using the same payroll engine
+        // This reflects actual working days so far — same number shown in Payroll tab
+        let currentEarnedSalary = 0;
+        let presentDays = 0;
+        let workingDays = 0;
+        try {
+            const payrolls = await generatePayrollService(req.adminId, month, null);
+            const empPayroll = payrolls.find(p => p.userId?.toString() === userId || p.userId?._id?.toString() === userId);
+            if (empPayroll) {
+                currentEarnedSalary = empPayroll.netSalary || 0;
+                presentDays        = empPayroll.presentDays || 0;
+                workingDays        = empPayroll.workingDays || 0;
+            }
+        } catch (calcErr) {
+            console.warn('[Expense] Could not compute live salary:', calcErr.message);
+        }
+
+        res.json({ ...summary, currentEarnedSalary, presentDays, workingDays });
     } catch (err) {
         console.error('[Expense] getEmployeeSummary error:', err);
         res.status(500).json({ message: 'Server error', error: err.message });

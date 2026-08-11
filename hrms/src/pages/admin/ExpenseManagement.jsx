@@ -207,12 +207,15 @@ const ExpenseManagement = ({ employees = [] }) => {
                     </div>
 
                     {/* Summary grid */}
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                        <SummaryCard label="Base Salary"     amount={summary.baseSalary}        color="text-slate-800" />
-                        <SummaryCard label="Advance Paid"    amount={summary.totalAdvance}       color="text-blue-600" />
-                        <SummaryCard label="Deductions"      amount={summary.totalDeductions}    color="text-rose-600" />
-                        <SummaryCard label="Bonus Paid"      amount={summary.totalBonusPaid}     color="text-amber-600" />
-                        <SummaryCard label="Net Payable"     amount={summary.netPayable}         color="text-primary" />
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3">
+                        <SummaryCard label="Base Salary"     amount={summary.baseSalary}            color="text-slate-800" />
+                        <SummaryCard label="Current Earned"  amount={summary.currentEarnedSalary}
+                            sub={`${summary.presentDays ?? '—'} days present`}
+                            color="text-indigo-600" />
+                        <SummaryCard label="Advance Paid"    amount={summary.totalAdvance}           color="text-blue-600" />
+                        <SummaryCard label="Deductions"      amount={summary.totalDeductions}        color="text-rose-600" />
+                        <SummaryCard label="Bonus Paid"      amount={summary.totalBonusPaid}         color="text-amber-600" />
+                        <SummaryCard label="Net Payable"     amount={summary.netPayable}             color="text-primary" />
                         <SummaryCard label="Remaining"       amount={summary.remainingBalance}
                             color={summary.remainingBalance > 0 ? 'text-emerald-600' : 'text-slate-400'}
                             sub={summary.remainingBalance === 0 ? 'Fully paid' : 'Still due'} />
@@ -327,12 +330,18 @@ const ExpenseManagement = ({ employees = [] }) => {
                     </Button>
                 </>}>
                 <div className="space-y-4">
-                    <div className="bg-emerald-50 rounded-xl p-4 text-center">
-                        <p className="text-xs text-emerald-600 font-semibold uppercase tracking-wide">Amount to Pay</p>
-                        <p className="text-3xl font-black text-emerald-700 mt-1">{fmt(summary?.baseSalary)}</p>
-                        <p className="text-xs text-emerald-500 mt-1">Full month salary for {month}</p>
-                    </div>
-                    <div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div className="bg-emerald-50 rounded-xl p-4 text-center">
+                            <p className="text-xs text-emerald-600 font-semibold uppercase tracking-wide">Base Salary</p>
+                            <p className="text-2xl font-black text-emerald-700 mt-1">{fmt(summary?.baseSalary)}</p>
+                            <p className="text-xs text-emerald-400 mt-1">Full month</p>
+                        </div>
+                        <div className="bg-indigo-50 rounded-xl p-4 text-center">
+                            <p className="text-xs text-indigo-600 font-semibold uppercase tracking-wide">Current Earned</p>
+                            <p className="text-2xl font-black text-indigo-700 mt-1">{fmt(summary?.currentEarnedSalary)}</p>
+                            <p className="text-xs text-indigo-400 mt-1">{summary?.presentDays ?? '—'} days present</p>
+                        </div>
+                    </div>                    <div>
                         <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5 block">Note (optional)</label>
                         <Input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Monthly salary payment" />
                     </div>
