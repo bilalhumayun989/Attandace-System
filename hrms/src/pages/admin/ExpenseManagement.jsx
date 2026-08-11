@@ -26,10 +26,10 @@ const PERIOD_LABELS = { '1-15': '1st – 15th', '16-end': '16th – End of Month
 
 // ─── Summary Card ────────────────────────────────────────────────────────────
 const SummaryCard = ({ label, amount, sub, color = 'text-slate-800', small = false }) => (
-    <div className="bg-white rounded-2xl border border-slate-200 p-4 flex flex-col gap-1 shadow-sm">
-        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">{label}</span>
-        <span className={`${small ? 'text-xl' : 'text-2xl'} font-black ${color}`}>{fmt(amount)}</span>
-        {sub && <span className="text-xs text-slate-400">{sub}</span>}
+    <div className="bg-white rounded-2xl border border-slate-200 p-3 sm:p-4 flex flex-col gap-1 shadow-sm min-w-0">
+        <span className="text-[10px] sm:text-xs font-semibold text-slate-400 uppercase tracking-wider truncate">{label}</span>
+        <span className={`text-base sm:text-lg font-black ${color} truncate`}>{fmt(amount)}</span>
+        {sub && <span className="text-[10px] sm:text-xs text-slate-400 truncate">{sub}</span>}
     </div>
 );
 
@@ -146,14 +146,14 @@ const ExpenseManagement = ({ employees = [] }) => {
     };
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-5">
             {/* ── Controls ── */}
-            <div className="flex flex-wrap items-center gap-3">
-                <div className="flex bg-white p-1 rounded-xl border border-slate-200 shadow-sm items-center">
+            <div className="flex flex-col sm:flex-row gap-3">
+                <div className="flex bg-white p-1 rounded-xl border border-slate-200 shadow-sm items-center w-full sm:w-auto">
                     <Input type="month" value={month} onChange={e => setMonth(e.target.value)}
-                        className="bg-transparent text-sm font-semibold px-3 py-1.5 border-none h-auto shadow-none focus-visible:ring-0 w-auto cursor-pointer" />
+                        className="bg-transparent text-sm font-semibold px-3 py-1.5 border-none h-auto shadow-none focus-visible:ring-0 w-full cursor-pointer" />
                 </div>
-                <div className="relative flex-1 min-w-[220px]">
+                <div className="relative flex-1">
                     <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
                     <select value={selectedEmpId} onChange={e => setSelectedEmpId(e.target.value)}
                         className="w-full h-10 pl-9 pr-8 rounded-xl border border-slate-200 bg-white text-sm shadow-sm focus:ring-1 focus:ring-primary appearance-none">
@@ -180,7 +180,7 @@ const ExpenseManagement = ({ employees = [] }) => {
 
             {/* ── Prompt if no employee selected ── */}
             {!selectedEmpId && (
-                <div className="flex flex-col items-center justify-center py-20 text-slate-400 gap-3">
+                <div className="flex flex-col items-center justify-center py-16 text-slate-400 gap-3">
                     <User className="h-12 w-12 opacity-30" />
                     <p className="text-sm font-medium">Select an employee to manage payments</p>
                 </div>
@@ -195,77 +195,74 @@ const ExpenseManagement = ({ employees = [] }) => {
 
             {/* ── Main Content ── */}
             {selectedEmpId && !loadingSummary && summary && (
-                <div className="space-y-6">
+                <div className="space-y-5">
                     {/* Employee info banner */}
-                    <div className="flex items-center gap-4 bg-white rounded-2xl border border-slate-200 px-5 py-4 shadow-sm">
-                        <div className="h-11 w-11 rounded-full bg-primary/10 flex items-center justify-center">
-                            <User className="h-5 w-5 text-primary" />
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-3 bg-white rounded-2xl border border-slate-200 px-4 py-4 shadow-sm">
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                            <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                                <User className="h-5 w-5 text-primary" />
+                            </div>
+                            <div className="min-w-0">
+                                <p className="font-bold text-slate-800 text-base truncate">{summary.user?.name}</p>
+                                <p className="text-xs text-slate-400 truncate">{summary.user?.employeeId} · {summary.user?.department}</p>
+                            </div>
                         </div>
-                        <div>
-                            <p className="font-bold text-slate-800 text-base">{summary.user?.name}</p>
-                            <p className="text-xs text-slate-400">{summary.user?.employeeId} · {summary.user?.department}</p>
-                        </div>
-                        <div className="ml-auto text-right">
+                        <div className="sm:text-right border-t sm:border-t-0 sm:border-l border-slate-100 pt-3 sm:pt-0 sm:pl-4">
                             <p className="text-xs text-slate-400 font-medium">Base Salary</p>
                             <p className="text-lg font-black text-slate-800">{fmt(summary.baseSalary)}</p>
                         </div>
                     </div>
 
-                    {/* Summary grid */}
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3">
-                        <SummaryCard label="Base Salary"     amount={summary.baseSalary}            color="text-slate-800" />
-                        <SummaryCard label="Current Earned"  amount={summary.currentEarnedSalary}
-                            sub={`${summary.presentDays ?? '—'} days present`}
-                            color="text-indigo-600" />
-                        <SummaryCard label="Advance Paid"    amount={summary.totalAdvance}           color="text-blue-600" />
-                        <SummaryCard label="Deductions"      amount={summary.totalDeductions}        color="text-rose-600" />
-                        <SummaryCard label="Bonus Paid"      amount={summary.totalBonusPaid}         color="text-amber-600" />
-                        <SummaryCard label="Net Payable"     amount={summary.netPayable}             color="text-primary" />
-                        <SummaryCard label="Remaining"       amount={summary.remainingBalance}
+                    {/* Summary grid — 2 cols mobile → 4 cols tablet → 7 cols desktop */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 sm:gap-3">
+                        <SummaryCard label="Base Salary"    amount={summary.baseSalary}           color="text-slate-800"   small />
+                        <SummaryCard label="Curr. Earned"   amount={summary.currentEarnedSalary}
+                            sub={`${summary.presentDays ?? '—'} days`}
+                            color="text-indigo-600" small />
+                        <SummaryCard label="Advance"        amount={summary.totalAdvance}          color="text-blue-600"    small />
+                        <SummaryCard label="Deductions"     amount={summary.totalDeductions}       color="text-rose-600"    small />
+                        <SummaryCard label="Bonus Paid"     amount={summary.totalBonusPaid}        color="text-amber-600"   small />
+                        <SummaryCard label="Net Payable"    amount={summary.netPayable}            color="text-primary"     small />
+                        <SummaryCard label="Remaining"      amount={summary.remainingBalance}
                             color={summary.remainingBalance > 0 ? 'text-emerald-600' : 'text-slate-400'}
-                            sub={summary.remainingBalance === 0 ? 'Fully paid' : 'Still due'} />
+                            sub={summary.remainingBalance === 0 ? 'Fully paid' : 'Still due'} small />
                     </div>
 
-                    {/* Action buttons */}
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                        {/* Full Salary */}
+                    {/* Action buttons — 2 cols mobile → 5 cols desktop */}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3">
                         <button onClick={() => openModal('full_salary')}
                             disabled={summary.fullSalaryPaid}
-                            className="group flex flex-col items-center gap-2 p-4 rounded-2xl border-2 border-dashed border-emerald-200 bg-emerald-50 hover:bg-emerald-100 hover:border-emerald-400 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
-                            <DollarSign className="h-6 w-6 text-emerald-600" />
+                            className="flex flex-col items-center gap-2 p-3 sm:p-4 rounded-2xl border-2 border-dashed border-emerald-200 bg-emerald-50 hover:bg-emerald-100 hover:border-emerald-400 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                            <DollarSign className="h-5 w-5 sm:h-6 sm:w-6 text-emerald-600" />
                             <span className="text-xs font-bold text-emerald-700 text-center leading-tight">
                                 {summary.fullSalaryPaid ? '✓ Salary Paid' : 'Pay Full Salary'}
                             </span>
                         </button>
-                        {/* Advance */}
                         <button onClick={() => openModal('advance')}
-                            className="group flex flex-col items-center gap-2 p-4 rounded-2xl border-2 border-dashed border-blue-200 bg-blue-50 hover:bg-blue-100 hover:border-blue-400 transition-all">
-                            <CreditCard className="h-6 w-6 text-blue-600" />
+                            className="flex flex-col items-center gap-2 p-3 sm:p-4 rounded-2xl border-2 border-dashed border-blue-200 bg-blue-50 hover:bg-blue-100 hover:border-blue-400 transition-all">
+                            <CreditCard className="h-5 w-5 sm:h-6 sm:w-6 text-blue-600" />
                             <span className="text-xs font-bold text-blue-700 text-center leading-tight">Advance Salary</span>
                         </button>
-                        {/* Deduction */}
                         <button onClick={() => openModal('deduction')}
-                            className="group flex flex-col items-center gap-2 p-4 rounded-2xl border-2 border-dashed border-rose-200 bg-rose-50 hover:bg-rose-100 hover:border-rose-400 transition-all">
-                            <TrendingDown className="h-6 w-6 text-rose-600" />
+                            className="flex flex-col items-center gap-2 p-3 sm:p-4 rounded-2xl border-2 border-dashed border-rose-200 bg-rose-50 hover:bg-rose-100 hover:border-rose-400 transition-all">
+                            <TrendingDown className="h-5 w-5 sm:h-6 sm:w-6 text-rose-600" />
                             <span className="text-xs font-bold text-rose-700 text-center leading-tight">Add Deduction</span>
                         </button>
-                        {/* Bonus */}
                         <button onClick={() => openModal('bonus')}
-                            className="group flex flex-col items-center gap-2 p-4 rounded-2xl border-2 border-dashed border-amber-200 bg-amber-50 hover:bg-amber-100 hover:border-amber-400 transition-all">
-                            <Gift className="h-6 w-6 text-amber-600" />
+                            className="flex flex-col items-center gap-2 p-3 sm:p-4 rounded-2xl border-2 border-dashed border-amber-200 bg-amber-50 hover:bg-amber-100 hover:border-amber-400 transition-all">
+                            <Gift className="h-5 w-5 sm:h-6 sm:w-6 text-amber-600" />
                             <span className="text-xs font-bold text-amber-700 text-center leading-tight">Add Bonus</span>
                         </button>
-                        {/* Custom */}
                         <button onClick={() => openModal('custom')}
-                            className="group flex flex-col items-center gap-2 p-4 rounded-2xl border-2 border-dashed border-purple-200 bg-purple-50 hover:bg-purple-100 hover:border-purple-400 transition-all">
-                            <Wallet className="h-6 w-6 text-purple-600" />
+                            className="col-span-2 sm:col-span-1 flex flex-col items-center gap-2 p-3 sm:p-4 rounded-2xl border-2 border-dashed border-purple-200 bg-purple-50 hover:bg-purple-100 hover:border-purple-400 transition-all">
+                            <Wallet className="h-5 w-5 sm:h-6 sm:w-6 text-purple-600" />
                             <span className="text-xs font-bold text-purple-700 text-center leading-tight">Custom Payment</span>
                         </button>
                     </div>
 
                     {/* Transaction history */}
-                    <Card className="border-slate-200 shadow-sm">
-                        <CardHeader className="pb-3">
+                    <Card className="border-slate-200 shadow-sm overflow-hidden">
+                        <CardHeader className="pb-3 px-4 sm:px-6">
                             <CardTitle className="text-base font-bold">Transaction History — {month}</CardTitle>
                         </CardHeader>
                         <CardContent className="p-0">
@@ -278,14 +275,16 @@ const ExpenseManagement = ({ employees = [] }) => {
                                         const Icon = meta.icon;
                                         const isPending = exp.status === 'Pending';
                                         return (
-                                            <div key={exp._id} className="flex items-center gap-4 px-5 py-3 hover:bg-slate-50 transition-colors">
-                                                <div className={`h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${meta.color}`}>
-                                                    <Icon className="h-4 w-4" />
+                                            <div key={exp._id} className="flex items-start gap-3 px-4 sm:px-5 py-3 hover:bg-slate-50 transition-colors">
+                                                {/* Icon */}
+                                                <div className={`h-8 w-8 sm:h-9 sm:w-9 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${meta.color}`}>
+                                                    <Icon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                                                 </div>
+
+                                                {/* Details */}
                                                 <div className="flex-1 min-w-0">
-                                                    <div className="flex items-center gap-2 flex-wrap">
+                                                    <div className="flex flex-wrap items-center gap-1.5">
                                                         <span className="text-sm font-semibold text-slate-800">{meta.label}</span>
-                                                        {/* Show salary sub-type for full_salary entries */}
                                                         {exp.type === 'full_salary' && (
                                                             <Badge variant="secondary" className="text-xs">
                                                                 {exp.note?.startsWith('[Full Month]') ? 'Full Month' : exp.note?.startsWith('[Current Earned]') ? 'Current Earned' : ''}
@@ -295,39 +294,41 @@ const ExpenseManagement = ({ employees = [] }) => {
                                                             <Badge variant="secondary" className="text-xs">{PERIOD_LABELS[exp.advancePeriod]}</Badge>
                                                         )}
                                                         <Badge variant={isPending ? 'warning' : 'success'} className="text-xs">
-                                                            {isPending ? <><Clock className="h-3 w-3 mr-1 inline" />Pending</> : <><CheckCircle2 className="h-3 w-3 mr-1 inline" />Paid</>}
+                                                            {isPending
+                                                                ? <><Clock className="h-3 w-3 mr-1 inline" />Pending</>
+                                                                : <><CheckCircle2 className="h-3 w-3 mr-1 inline" />Paid</>}
                                                         </Badge>
                                                     </div>
-                                                    {/* Employee name */}
-                                                    <p className="text-xs font-medium text-slate-600 mt-0.5">
+                                                    <p className="text-xs font-medium text-slate-600 mt-0.5 truncate">
                                                         {exp.userId?.name || summary?.user?.name} · {exp.userId?.employeeId || summary?.user?.employeeId}
                                                     </p>
-                                                    {/* Note — strip the prefix tags */}
                                                     {exp.note && !['[Full Month]', '[Current Earned]'].includes(exp.note.trim()) && (
                                                         <p className="text-xs text-slate-400 truncate mt-0.5">
                                                             {exp.note.replace(/^\[(Full Month|Current Earned)\]\s*/, '')}
                                                         </p>
                                                     )}
                                                     <p className="text-xs text-slate-400 mt-0.5">
-                                                        {new Date(exp.createdAt).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                                        {new Date(exp.createdAt).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' })}
                                                     </p>
                                                 </div>
-                                                <div className="text-right shrink-0">
-                                                    <p className={`font-black text-base ${exp.type === 'deduction' ? 'text-rose-600' : exp.type === 'bonus' ? 'text-amber-600' : 'text-slate-800'}`}>
+
+                                                {/* Amount + Actions — stacked on mobile */}
+                                                <div className="flex flex-col items-end gap-1 shrink-0">
+                                                    <p className={`font-black text-sm sm:text-base ${exp.type === 'deduction' ? 'text-rose-600' : exp.type === 'bonus' ? 'text-amber-600' : 'text-slate-800'}`}>
                                                         {exp.type === 'deduction' ? '−' : '+'}{fmt(exp.amount)}
                                                     </p>
-                                                </div>
-                                                <div className="flex items-center gap-1 shrink-0">
-                                                    {exp.type === 'bonus' && isPending && (
-                                                        <Button size="sm" onClick={() => handlePayPendingBonus(exp._id)} disabled={actionLoading}
-                                                            className="h-7 px-3 text-xs bg-amber-500 hover:bg-amber-600 text-white rounded-lg">
-                                                            Pay Now
+                                                    <div className="flex items-center gap-1">
+                                                        {exp.type === 'bonus' && isPending && (
+                                                            <Button size="sm" onClick={() => handlePayPendingBonus(exp._id)} disabled={actionLoading}
+                                                                className="h-6 px-2 text-xs bg-amber-500 hover:bg-amber-600 text-white rounded-lg">
+                                                                Pay
+                                                            </Button>
+                                                        )}
+                                                        <Button size="icon" variant="ghost" onClick={() => handleDelete(exp._id)} disabled={actionLoading}
+                                                            className="h-6 w-6 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg">
+                                                            <Trash2 className="h-3 w-3" />
                                                         </Button>
-                                                    )}
-                                                    <Button size="icon" variant="ghost" onClick={() => handleDelete(exp._id)} disabled={actionLoading}
-                                                        className="h-7 w-7 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg">
-                                                        <Trash2 className="h-3.5 w-3.5" />
-                                                    </Button>
+                                                    </div>
                                                 </div>
                                             </div>
                                         );
@@ -353,7 +354,7 @@ const ExpenseManagement = ({ employees = [] }) => {
                     {/* Salary type selector */}
                     <div>
                         <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 block">Select Payment Type</label>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <button onClick={() => setSalaryType('full_month')}
                                 className={`p-4 rounded-xl border-2 text-left transition-all ${salaryType === 'full_month' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-emerald-300'}`}>
                                 <p className={`text-sm font-bold ${salaryType === 'full_month' ? 'text-emerald-700' : 'text-slate-600'}`}>Full Month Salary</p>
