@@ -31,7 +31,8 @@ const computeSummary = async (userId, month) => {
     const user = await User.findById(userId).select('salary name employeeId department');
     if (!user) return null;
 
-    const expenses = await Expense.find({ userId, month });
+    const expenses = await Expense.find({ userId, month })
+        .populate('userId', 'name employeeId department');
 
     const baseSalary = user.salary || 0;
 
@@ -152,12 +153,16 @@ const getExpenses = async (req, res) => {
 /**
  * POST /api/expenses/full-salary
  * Mark an employee's full salary as paid for the month.
- * Body: { userId, month?, note? }
+ * Body: { userId, month?, salaryType ('full_month'|'current_earned'), currentEarnedSalary?, note? }
  */
 const payFullSalary = async (req, res) => {
     try {
-        const { userId, month, note } = req.body;
+        const { userId, month, salaryType, currentEarnedSalary, note } = req.body;
         const targetMonth = month || getCurrentMonth();
+
+        if (!['full_month', 'current_earned'].includes(salaryType)) {
+            return res.status(400).json({ message: 'salaryType must be "full_month" or "current_earned".' });
+        }
 
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ message: 'Employee not found.' });
@@ -165,21 +170,32 @@ const payFullSalary = async (req, res) => {
             return res.status(403).json({ message: 'Access denied.' });
         }
 
-        // Prevent duplicate full-salary payment for same month
-        const existing = await Expense.findOne({ userId, month: targetMonth, type: 'full_salary' });
-        if (existing) {
-            return res.status(400).json({ message: 'Full salary already marked as paid for this month.' });
+        // Prevent duplicate full-salary payment of same type for same month
+        const existing = await Expense.findOne({ userId, month: targetMonth, type: 'full_salary', note: { $regex: salaryType === 'full_month' ? 'Full Month' : 'Current Earned' } });
+        // Use a metadata field instead — store salaryType in note prefix only if no note given
+        // Better: check via a dedicated query on amount matching
+        const existingAny = await Expense.findOne({ userId, month: targetMonth, type: 'full_salary' });
+        if (existingAny) {
+            return res.status(400).json({ message: 'Full salary already recorded for this month. Delete the existing entry first to re-record.' });
         }
+
+        // Determine the amount to pay
+        const amount = salaryType === 'full_month'
+            ? (user.salary || 0)
+            : Math.max(0, Number(currentEarnedSalary) || 0);
+
+        const labelPrefix = salaryType === 'full_month' ? '[Full Month]' : '[Current Earned]';
+        const finalNote = note ? `${labelPrefix} ${note}` : labelPrefix;
 
         const expense = await Expense.create({
             userId,
             adminId: req.adminId,
             type: 'full_salary',
-            amount: user.salary || 0,
+            amount,
             month: targetMonth,
             status: 'Paid',
             paidAt: new Date(),
-            note: note || '',
+            note: finalNote,
             deductFromPayroll: false,
         });
 
@@ -190,7 +206,7 @@ const payFullSalary = async (req, res) => {
         );
 
         const summary = await computeSummary(userId, targetMonth);
-        res.status(201).json({ message: 'Full salary marked as paid.', expense, summary });
+        res.status(201).json({ message: `${salaryType === 'full_month' ? 'Full month' : 'Current earned'} salary marked as paid.`, expense, summary });
     } catch (err) {
         console.error('[Expense] payFullSalary error:', err);
         res.status(500).json({ message: 'Server error', error: err.message });

@@ -51,6 +51,7 @@ const ExpenseManagement = ({ employees = [] }) => {
     const [amount, setAmount] = useState('');
     const [note, setNote] = useState('');
     const [bonusPayNow, setBonusPayNow] = useState(true);
+    const [salaryType, setSalaryType] = useState('full_month'); // 'full_month' | 'current_earned'
 
     const selectedEmp = employees.find(e => e._id === selectedEmpId);
 
@@ -73,7 +74,7 @@ const ExpenseManagement = ({ employees = [] }) => {
 
     const openModal = (type) => {
         setModal(type); setAmount(''); setNote('');
-        setAdvancePeriod('1-15'); setBonusPayNow(true);
+        setAdvancePeriod('1-15'); setBonusPayNow(true); setSalaryType('full_month');
         setError(''); setSuccess('');
     };
     const closeModal = () => { setModal(null); setError(''); };
@@ -126,7 +127,11 @@ const ExpenseManagement = ({ employees = [] }) => {
     };
 
     const handleSubmit = () => {
-        if (modal === 'full_salary') return apiCall('full-salary', { note });
+        if (modal === 'full_salary') return apiCall('full-salary', {
+            salaryType,
+            currentEarnedSalary: summary?.currentEarnedSalary,
+            note
+        });
         if (modal === 'advance')     return apiCall('advance', { advancePeriod, note });
         if (modal === 'deduction')   return apiCall('deduction', { amount: Number(amount), note });
         if (modal === 'bonus')       return apiCall('bonus', { amount: Number(amount), payNow: bonusPayNow, note });
@@ -280,6 +285,12 @@ const ExpenseManagement = ({ employees = [] }) => {
                                                 <div className="flex-1 min-w-0">
                                                     <div className="flex items-center gap-2 flex-wrap">
                                                         <span className="text-sm font-semibold text-slate-800">{meta.label}</span>
+                                                        {/* Show salary sub-type for full_salary entries */}
+                                                        {exp.type === 'full_salary' && (
+                                                            <Badge variant="secondary" className="text-xs">
+                                                                {exp.note?.startsWith('[Full Month]') ? 'Full Month' : exp.note?.startsWith('[Current Earned]') ? 'Current Earned' : ''}
+                                                            </Badge>
+                                                        )}
                                                         {exp.advancePeriod && (
                                                             <Badge variant="secondary" className="text-xs">{PERIOD_LABELS[exp.advancePeriod]}</Badge>
                                                         )}
@@ -287,9 +298,18 @@ const ExpenseManagement = ({ employees = [] }) => {
                                                             {isPending ? <><Clock className="h-3 w-3 mr-1 inline" />Pending</> : <><CheckCircle2 className="h-3 w-3 mr-1 inline" />Paid</>}
                                                         </Badge>
                                                     </div>
-                                                    {exp.note && <p className="text-xs text-slate-400 truncate mt-0.5">{exp.note}</p>}
+                                                    {/* Employee name */}
+                                                    <p className="text-xs font-medium text-slate-600 mt-0.5">
+                                                        {exp.userId?.name || summary?.user?.name} · {exp.userId?.employeeId || summary?.user?.employeeId}
+                                                    </p>
+                                                    {/* Note — strip the prefix tags */}
+                                                    {exp.note && !['[Full Month]', '[Current Earned]'].includes(exp.note.trim()) && (
+                                                        <p className="text-xs text-slate-400 truncate mt-0.5">
+                                                            {exp.note.replace(/^\[(Full Month|Current Earned)\]\s*/, '')}
+                                                        </p>
+                                                    )}
                                                     <p className="text-xs text-slate-400 mt-0.5">
-                                                        {new Date(exp.createdAt).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                                        {new Date(exp.createdAt).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                                                     </p>
                                                 </div>
                                                 <div className="text-right shrink-0">
@@ -330,18 +350,25 @@ const ExpenseManagement = ({ employees = [] }) => {
                     </Button>
                 </>}>
                 <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-3">
-                        <div className="bg-emerald-50 rounded-xl p-4 text-center">
-                            <p className="text-xs text-emerald-600 font-semibold uppercase tracking-wide">Base Salary</p>
-                            <p className="text-2xl font-black text-emerald-700 mt-1">{fmt(summary?.baseSalary)}</p>
-                            <p className="text-xs text-emerald-400 mt-1">Full month</p>
+                    {/* Salary type selector */}
+                    <div>
+                        <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 block">Select Payment Type</label>
+                        <div className="grid grid-cols-2 gap-3">
+                            <button onClick={() => setSalaryType('full_month')}
+                                className={`p-4 rounded-xl border-2 text-left transition-all ${salaryType === 'full_month' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-emerald-300'}`}>
+                                <p className={`text-sm font-bold ${salaryType === 'full_month' ? 'text-emerald-700' : 'text-slate-600'}`}>Full Month Salary</p>
+                                <p className={`text-2xl font-black mt-1 ${salaryType === 'full_month' ? 'text-emerald-700' : 'text-slate-800'}`}>{fmt(summary?.baseSalary)}</p>
+                                <p className="text-xs text-slate-400 mt-1 leading-tight">Pays the full base salary regardless of attendance or overtime</p>
+                            </button>
+                            <button onClick={() => setSalaryType('current_earned')}
+                                className={`p-4 rounded-xl border-2 text-left transition-all ${salaryType === 'current_earned' ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:border-indigo-300'}`}>
+                                <p className={`text-sm font-bold ${salaryType === 'current_earned' ? 'text-indigo-700' : 'text-slate-600'}`}>Current Earned</p>
+                                <p className={`text-2xl font-black mt-1 ${salaryType === 'current_earned' ? 'text-indigo-700' : 'text-slate-800'}`}>{fmt(summary?.currentEarnedSalary)}</p>
+                                <p className="text-xs text-slate-400 mt-1 leading-tight">{summary?.presentDays ?? '—'} days present · based on actual attendance up to today</p>
+                            </button>
                         </div>
-                        <div className="bg-indigo-50 rounded-xl p-4 text-center">
-                            <p className="text-xs text-indigo-600 font-semibold uppercase tracking-wide">Current Earned</p>
-                            <p className="text-2xl font-black text-indigo-700 mt-1">{fmt(summary?.currentEarnedSalary)}</p>
-                            <p className="text-xs text-indigo-400 mt-1">{summary?.presentDays ?? '—'} days present</p>
-                        </div>
-                    </div>                    <div>
+                    </div>
+                    <div>
                         <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5 block">Note (optional)</label>
                         <Input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Monthly salary payment" />
                     </div>
