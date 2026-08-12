@@ -20,6 +20,10 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
     // 1. Determine Date Range for the Cycle
     let startDate, endDate;
 
+    // Today at midnight — no future days ever count
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     if (customStart && customEnd) {
         startDate = new Date(customStart);
         endDate = new Date(customEnd);
@@ -31,38 +35,27 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
         let daysInMonth = new Date(reqYear, reqMonth, 0).getDate();
 
         if (cycle === 15 || cycle === '15') {
-            // Cycle 15: 1st of Current Month -> 15th of Current Month
             startDate = new Date(reqYear, reqMonth - 1, 1, 12, 0, 0);
             endDate = new Date(reqYear, reqMonth - 1, 15, 12, 0, 0);
         } else if (cycle === 31 || cycle === '31') {
-            // Cycle 31: 16th of Current Month -> End of Current Month
             startDate = new Date(reqYear, reqMonth - 1, 16, 12, 0, 0);
             endDate = new Date(reqYear, reqMonth, 0, 12, 0, 0);
         } else {
             // Default Full Month
             startDate = new Date(reqYear, reqMonth - 1, 1, 12, 0, 0);
             endDate = new Date(reqYear, reqMonth - 1, daysInMonth, 12, 0, 0);
-
-            const today = new Date();
-            if (today.getFullYear() === reqYear && (today.getMonth() + 1) === reqMonth) {
-                endDate = new Date(reqYear, reqMonth - 1, today.getDate());
-            } else if (today.getFullYear() < reqYear || (today.getFullYear() === reqYear && (today.getMonth() + 1) < reqMonth)) {
-                endDate = new Date(reqYear, reqMonth - 1, 0); // Future
-            }
         }
     }
 
-    // Cap the endDate to today only if it's not an explicit cycle, so we don't penalize future days if generated early
-    if (!cycle && !customStart) {
-        const currentToday = new Date();
-        currentToday.setHours(0, 0, 0, 0);
-        if (endDate > currentToday) {
-            endDate = new Date(currentToday);
-        }
+    // ── ALWAYS cap endDate to today ──────────────────────────────────────────
+    // Future attendance records must never be included in any calculation.
+    // This applies to all modes: cycle-15, cycle-31, full-month, and custom range.
+    if (endDate > today) {
+        endDate = new Date(today);
     }
 
     if (startDate > endDate) {
-        return []; // The cycle hasn't even started yet!
+        return []; // Cycle hasn't started yet or is entirely in the future
     }
 
     // Format dates for DB querying
@@ -200,9 +193,9 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                     presentDays++;
 
                     if (worked > 11 * 60) {
-                        // > 11h → full day pay + overtime bonus
-                        dayEarnedSalary = perDaySalary + overtimePay;
-                        dayPayLabel = 'Off Day (Worked — Full Day + Overtime)';
+                        // Off day overtime: salary/26 replaces normal rate
+                        dayEarnedSalary = overtimePay;
+                        dayPayLabel = 'Off Day (Overtime)';
                     } else if (worked > 6 * 60) {
                         // > 6h ≤ 11h → full day (same as off-day floor, no extra)
                         dayEarnedSalary = perDaySalary;
@@ -224,8 +217,8 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                     date: dateString,
                     status: dayPayLabel + labelSuffix,
                     workMinutes: baseMinutes,
-                    baseDaySalary: Math.round(dayEarnedSalary - (record?.duration > 11 * 60 ? overtimePay : 0)),
-                    overtimePay: record?.duration > 11 * 60 ? Math.round(overtimePay) : 0,
+                    baseDaySalary: baseMinutes > 11 * 60 ? 0 : Math.round(dayEarnedSalary),
+                    overtimePay: baseMinutes > 11 * 60 ? Math.round(overtimePay) : 0,
                     earnedSalary: Math.round(dayEarnedSalary)
                 });
                 loopDate.setDate(loopDate.getDate() + 1);
@@ -304,9 +297,9 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                 presentDays++;
 
                 if (baseMinutes > 11 * 60) {
-                    dayEarnedSalary = perDaySalary + overtimePay;
-                    dayPayLabel = 'Present (Full Day + Overtime)';
-                    // Accumulate overtime metrics
+                    // Overtime day: pay salary/26 for the whole day (replaces normal day rate)
+                    dayEarnedSalary = overtimePay;
+                    dayPayLabel = 'Present (Overtime Day)';
                     totalOvertimeMinutes += (baseMinutes - 11 * 60);
                     totalOvertimePay += overtimePay;
                 } else if (baseMinutes > 6 * 60) {
@@ -332,7 +325,7 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                 date: dateString,
                 status: dayPayLabel + labelSuffix,
                 workMinutes: baseMinutes,
-                baseDaySalary: Math.round(dayEarnedSalary - (baseMinutes > 11 * 60 ? overtimePay : 0)),
+                baseDaySalary: baseMinutes > 11 * 60 ? 0 : Math.round(dayEarnedSalary),
                 overtimePay: baseMinutes > 11 * 60 ? Math.round(overtimePay) : 0,
                 earnedSalary: Math.round(dayEarnedSalary),
                 ...(dayEarnedSalary === 0 && (!record || !record.checkOut) ? { deduction: Math.round(monthlySalary / 30) } : {})
