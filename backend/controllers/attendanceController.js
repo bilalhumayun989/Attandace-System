@@ -321,9 +321,11 @@ const checkOut = async (req, res) => {
         const checkInTime = new Date(attendance.checkIn);
 
         // Block checkout if less than 30 minutes have passed since checkIn
+        // Use real UTC now (new Date()) for comparison — checkIn is stored as UTC in MongoDB
+        const realNow = new Date();
         const thirtyMinsAfterCheckIn = new Date(checkInTime.getTime() + (30 * 60 * 1000));
-        if (pktNow < thirtyMinsAfterCheckIn) {
-            const remainingMs  = thirtyMinsAfterCheckIn - pktNow;
+        if (realNow < thirtyMinsAfterCheckIn) {
+            const remainingMs  = thirtyMinsAfterCheckIn - realNow;
             const remainingMin = Math.ceil(remainingMs / (1000 * 60));
             return res.status(400).json({
                 message: `You cannot check out yet. Please wait ${remainingMin} more minute${remainingMin === 1 ? '' : 's'} before checking out.`
