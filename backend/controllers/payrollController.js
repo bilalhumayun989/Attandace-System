@@ -18,49 +18,45 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
     const todayDateStr = formatInTimeZone(new Date(), 'Asia/Karachi', 'yyyy-MM-dd');
 
     // 1. Determine Date Range for the Cycle
-    let startDate, endDate;
+    // Work with plain YYYY-MM-DD strings to avoid timezone/time-of-day comparison bugs.
+    const todayStr = formatInTimeZone(new Date(), 'Asia/Karachi', 'yyyy-MM-dd');
 
-    // Today at midnight — no future days ever count
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    let startStr, endStr;
 
     if (customStart && customEnd) {
-        startDate = new Date(customStart);
-        endDate = new Date(customEnd);
+        startStr = customStart;
+        endStr   = customEnd;
     } else {
         const [yearStr, monthStr] = month.split('-');
-        const reqYear = parseInt(yearStr, 10);
+        const reqYear  = parseInt(yearStr, 10);
         const reqMonth = parseInt(monthStr, 10);
+        const daysInMonth = new Date(reqYear, reqMonth, 0).getDate();
 
-        let daysInMonth = new Date(reqYear, reqMonth, 0).getDate();
+        const pad = (n) => String(n).padStart(2, '0');
+        const y = yearStr;
+        const m = pad(reqMonth);
 
         if (cycle === 15 || cycle === '15') {
-            startDate = new Date(reqYear, reqMonth - 1, 1, 12, 0, 0);
-            endDate = new Date(reqYear, reqMonth - 1, 15, 12, 0, 0);
+            startStr = `${y}-${m}-01`;
+            endStr   = `${y}-${m}-15`;
         } else if (cycle === 31 || cycle === '31') {
-            startDate = new Date(reqYear, reqMonth - 1, 16, 12, 0, 0);
-            endDate = new Date(reqYear, reqMonth, 0, 12, 0, 0);
+            startStr = `${y}-${m}-16`;
+            endStr   = `${y}-${m}-${pad(daysInMonth)}`;
         } else {
-            // Default Full Month
-            startDate = new Date(reqYear, reqMonth - 1, 1, 12, 0, 0);
-            endDate = new Date(reqYear, reqMonth - 1, daysInMonth, 12, 0, 0);
+            // Full month
+            startStr = `${y}-${m}-01`;
+            endStr   = `${y}-${m}-${pad(daysInMonth)}`;
         }
     }
 
-    // ── ALWAYS cap endDate to today ──────────────────────────────────────────
-    // Future attendance records must never be included in any calculation.
-    // This applies to all modes: cycle-15, cycle-31, full-month, and custom range.
-    if (endDate > today) {
-        endDate = new Date(today);
-    }
+    // Always cap endStr to today — no future days in any mode
+    if (endStr > todayStr) endStr = todayStr;
 
-    if (startDate > endDate) {
-        return []; // Cycle hasn't started yet or is entirely in the future
-    }
+    if (startStr > endStr) return []; // Hasn't started yet or entirely in the future
 
-    // Format dates for DB querying
-    const startStr = `${startDate.getFullYear()}-${(startDate.getMonth() + 1).toString().padStart(2, '0')}-${startDate.getDate().toString().padStart(2, '0')}`;
-    const endStr = `${endDate.getFullYear()}-${(endDate.getMonth() + 1).toString().padStart(2, '0')}-${endDate.getDate().toString().padStart(2, '0')}`;
+    // Convert to Date objects for the loop (use noon to avoid DST issues)
+    const startDate = new Date(`${startStr}T12:00:00`);
+    const endDate   = new Date(`${endStr}T12:00:00`);
     const totalDaysInCycle = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
 
     // Reconcile attendance in bulk for all employees first
