@@ -19,7 +19,10 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
 
     // 1. Determine Date Range for the Cycle
     // Work with plain YYYY-MM-DD strings to avoid timezone/time-of-day comparison bugs.
-    const todayStr = formatInTimeZone(new Date(), 'Asia/Karachi', 'yyyy-MM-dd');
+    // Cap is yesterday (today - 1) because today's attendance is not complete yet.
+    const nowPKT = new Date(formatInTimeZone(new Date(), 'Asia/Karachi', "yyyy-MM-dd'T'HH:mm:ssXXX"));
+    nowPKT.setDate(nowPKT.getDate() - 1);
+    const capStr = formatInTimeZone(nowPKT, 'Asia/Karachi', 'yyyy-MM-dd');
 
     let startStr, endStr;
 
@@ -49,8 +52,8 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
         }
     }
 
-    // Always cap endStr to today — no future days in any mode
-    if (endStr > todayStr) endStr = todayStr;
+    // Always cap endStr to yesterday — today's attendance is incomplete
+    if (endStr > capStr) endStr = capStr;
 
     if (startStr > endStr) return []; // Hasn't started yet or entirely in the future
 
