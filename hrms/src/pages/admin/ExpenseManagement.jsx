@@ -335,10 +335,12 @@ const ExpenseManagement = ({ employees = [] }) => {
                                                                 Pay
                                                             </Button>
                                                         )}
+                                                        {/* Delete disabled — paid transactions are permanent records
                                                         <Button size="icon" variant="ghost" onClick={() => handleDelete(exp._id)} disabled={actionLoading}
                                                             className="h-6 w-6 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg">
                                                             <Trash2 className="h-3 w-3" />
                                                         </Button>
+                                                        */}
                                                     </div>
                                                 </div>
                                             </div>

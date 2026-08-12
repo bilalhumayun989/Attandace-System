@@ -40,7 +40,7 @@ router.post('/custom', addCustomPayment);
 // PATCH /api/expenses/:id/pay-bonus         — pay a pending bonus
 router.patch('/:id/pay-bonus', payPendingBonus);
 
-// DELETE /api/expenses/:id                  — delete an expense entry
-router.delete('/:id', deleteExpense);
+// DELETE disabled — paid transactions are permanent records and cannot be deleted
+// router.delete('/:id', deleteExpense);
 
 module.exports = router;
