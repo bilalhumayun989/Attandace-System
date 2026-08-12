@@ -233,7 +233,7 @@ const ExpenseManagement = ({ employees = [] }) => {
                         <SummaryCard label="Advance"       amount={summary.totalAdvance}          color="text-blue-600"   />
                         <SummaryCard label="Deductions"    amount={summary.totalDeductions}       color="text-rose-600"   />
                         <SummaryCard label="Bonus Paid"    amount={summary.totalBonusPaid}        color="text-amber-600"  />
-                        <SummaryCard label="Effective"     amount={summary.netPayable}            color="text-primary"    />
+                        <SummaryCard label="Net Payable"   amount={summary.netPayable}            color="text-primary"    />
                         <SummaryCard label="Remaining"     amount={summary.remainingBalance}
                             color={summary.remainingBalance > 0 ? 'text-emerald-600' : 'text-slate-400'}
                             sub={summary.remainingBalance === 0 ? 'Fully paid' : 'Still due'} />
