@@ -282,64 +282,96 @@ const sendDailyReport = async (tenantId = null) => {
 
 const autoGenerateAndSendPayroll = async (cycle, monthOffset = 0) => {
     try {
-        console.log(`[Cron] Starting auto payroll generation for cycle ${cycle === 15 ? '1st-15th' : '16th-End'}...`);
+        console.log(`[Payroll Cron] Starting auto payroll for cycle ${cycle === 15 ? '1st-15th' : '16th-End'}...`);
         const { generatePayrollService } = require('../controllers/payrollController');
-        
+
         const date = new Date();
-        if (monthOffset) {
-            date.setMonth(date.getMonth() - monthOffset);
-        }
+        if (monthOffset) date.setMonth(date.getMonth() - monthOffset);
         const monthStr = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
 
-        const admins = await User.find({ role: 'Admin' });
-        if (admins.length === 0) return;
+        const cycleLabel    = cycle === 15 ? '1st–15th' : '16th–End';
+        const cycleLabelLong = cycle === 15 ? '1st to 15th' : '16th to End';
+
+        // Fetch ALL tenant roots (Admin + SuperAdmin where adminId == own _id)
+        const allOwners = await User.find({
+            role: { $in: ['Admin', 'SuperAdmin'] },
+            status: { $ne: 'Deleted' }
+        });
+        const tenantRoots = allOwners.filter(u => u.adminId?.toString() === u._id.toString());
+
+        if (tenantRoots.length === 0) {
+            console.log('[Payroll Cron] No tenant roots found.');
+            return;
+        }
+
+        // Fetch all sub-SuperAdmins (adminId != own _id) grouped by their tenant
+        const subSuperAdmins = await User.find({
+            role: 'SuperAdmin',
+            status: { $ne: 'Deleted' }
+        }).then(list => list.filter(u => u.adminId?.toString() !== u._id.toString()));
+
+        // Build tenant map: tenantId → { root, recipients[] }
+        const tenantMap = {};
+        for (const root of tenantRoots) {
+            const tid = root._id.toString();
+            tenantMap[tid] = { root, recipients: [] };
+            if (root.email) tenantMap[tid].recipients.push(root);
+        }
+        for (const sa of subSuperAdmins) {
+            const tid = sa.adminId?.toString();
+            if (tid && tenantMap[tid] && sa.email) {
+                tenantMap[tid].recipients.push(sa);
+            }
+        }
 
         const transporter = nodemailer.createTransport({
             service: 'gmail',
-            auth: {
-                user: process.env.EMAIL_USER,
-                pass: process.env.EMAIL_PASS
-            }
+            auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
         });
 
-        for (const admin of admins) {
-            // 1. Generate Payroll Data via Service
-            const payrolls = await generatePayrollService(admin._id, monthStr, cycle);
-            
-            if (payrolls.length === 0) continue; // Skip if no employees
+        for (const [tid, { root, recipients }] of Object.entries(tenantMap)) {
+            if (recipients.length === 0) {
+                console.log(`[Payroll Cron] Tenant "${root.name}" has no email recipients — skipping.`);
+                continue;
+            }
 
-            // Populate userId to get name and department for the report
+            // Generate payroll using the tenant root's adminId
+            const payrolls = await generatePayrollService(root._id, monthStr, cycle);
+            if (payrolls.length === 0) {
+                console.log(`[Payroll Cron] No employees for tenant "${root.name}" — skipping.`);
+                continue;
+            }
+
             await Payroll.populate(payrolls, { path: 'userId', select: 'name department employeeId status' });
-            
-            // 2. Build Excel Report
-            const workbook = new ExcelJS.Workbook();
-            const worksheetName = cycle === 15 ? '1st_to_15th' : '16th_to_End';
-            const worksheet = workbook.addWorksheet(`Payroll_${worksheetName}`);
+
+            // Build Excel
+            const workbook  = new ExcelJS.Workbook();
+            const worksheet = workbook.addWorksheet(`Payroll_${cycle === 15 ? '1st_15th' : '16th_End'}`);
 
             worksheet.columns = [
-                { header: 'Employee Name', key: 'name', width: 25 },
-                { header: 'Department', key: 'dept', width: 20 },
-                { header: 'Base Salary', key: 'base', width: 15 },
-                { header: 'Payable Days', key: 'days', width: 15 },
-                { header: 'Absents', key: 'absents', width: 10 },
-                { header: 'Lates', key: 'lates', width: 10 },
-                { header: 'Overtime (hrs)', key: 'ot', width: 15 },
+                { header: 'Employee Name',    key: 'name',       width: 25 },
+                { header: 'Department',       key: 'dept',       width: 20 },
+                { header: 'Base Salary',      key: 'base',       width: 15 },
+                { header: 'Payable Days',     key: 'days',       width: 15 },
+                { header: 'Absents',          key: 'absents',    width: 10 },
+                { header: 'Lates',            key: 'lates',      width: 10 },
+                { header: 'Overtime (hrs)',   key: 'ot',         width: 15 },
                 { header: 'Total Deductions', key: 'deductions', width: 18 },
-                { header: 'Net Salary', key: 'net', width: 15 },
+                { header: 'Net Salary',       key: 'net',        width: 15 },
             ];
 
             payrolls.forEach(p => {
-                const isDeleted = p.userId?.status === 'Deleted' ? ' (Deleted)' : '';
+                const deleted = p.userId?.status === 'Deleted' ? ' (Deleted)' : '';
                 worksheet.addRow({
-                    name: (p.userId?.name || 'Unknown') + isDeleted,
-                    dept: p.userId?.department || '-',
-                    base: `Rs ${p.salary}`,
-                    days: p.payableDays,
-                    absents: p.totalAbsents,
-                    lates: p.totalLates,
-                    ot: p.overtime ? `${Math.floor(p.overtime.minutes / 60)}h ${p.overtime.minutes % 60}m` : '0h 0m',
+                    name:       (p.userId?.name || 'Unknown') + deleted,
+                    dept:       p.userId?.department || '-',
+                    base:       `Rs ${p.salary}`,
+                    days:       p.payableDays,
+                    absents:    p.totalAbsents,
+                    lates:      p.totalLates,
+                    ot:         p.overtime ? `${Math.floor(p.overtime.minutes / 60)}h ${p.overtime.minutes % 60}m` : '0h 0m',
                     deductions: `Rs ${p.deductions?.totalDeduction || 0}`,
-                    net: `Rs ${p.netSalary}`
+                    net:        `Rs ${p.netSalary}`
                 });
             });
 
@@ -347,25 +379,25 @@ const autoGenerateAndSendPayroll = async (cycle, monthOffset = 0) => {
             worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
             const buffer = await workbook.xlsx.writeBuffer();
 
-            // 3. Email Admin
-            if (!admin.email) continue;
-            
-            await transporter.sendMail({
-                from: `"HRMS Payroll Auto-Generator" <${process.env.EMAIL_USER}>`,
-                to: admin.email,
-                subject: `Auto Payroll Report - Cycle ${cycle === 15 ? '1st-15th' : '16th-End'} (${monthStr})`,
-                text: `Hello ${admin.name},\n\nThe automated payroll for the cycle ${cycle === 15 ? '1st to 15th' : '16th to End'} of ${monthStr} has been generated successfully. Please find the detailed Excel report attached.\n\nRegards,\nHRMS Automation`,
-                attachments: [
-                    {
-                        filename: `Payroll_${cycle === 15 ? '1st-15th' : '16th-End'}_${monthStr}.xlsx`,
+            // Send to all recipients of this tenant (Admin + SubSuperAdmins)
+            for (const recipient of recipients) {
+                await transporter.sendMail({
+                    from: `"HRMS Payroll Auto-Generator" <${process.env.EMAIL_USER}>`,
+                    to: recipient.email,
+                    subject: `Payroll Report — ${cycleLabel} (${monthStr})`,
+                    text: `Hello ${recipient.name},\n\nThe automated payroll report for the cycle ${cycleLabelLong} of ${monthStr} has been generated. Please find the Excel report attached.\n\nTotal employees: ${payrolls.length}\n\nRegards,\nHRMS Automation`,
+                    attachments: [{
+                        filename: `Payroll_${cycleLabel.replace('–', '-')}_${monthStr}.xlsx`,
                         content: buffer
-                    }
-                ]
-            });
-            console.log(`[Cron] Auto payroll emailed to admin: ${admin.email}`);
+                    }]
+                });
+                console.log(`[Payroll Cron] Sent to ${recipient.email} [${recipient.role}] — ${payrolls.length} employees`);
+            }
         }
+
+        console.log(`[Payroll Cron] Done for cycle ${cycleLabel} (${monthStr}).`);
     } catch (error) {
-        console.error('[Cron Error] Failed to generate/send auto payroll:', error);
+        console.error('[Payroll Cron Error]', error);
     }
 };
 
@@ -385,16 +417,18 @@ cron.schedule('0 6 * * *', () => {
     timezone: "Asia/Karachi"
 });
 
-// Auto-Payroll: Run on the 2nd of every month at 2:00 AM PKT (Calculates for 16th-End of Previous Month)
-cron.schedule('0 2 2 * *', () => {
+// Auto-Payroll: 1st of every month at 6:00 AM PKT
+// Sends payroll for 16th–End of PREVIOUS month (monthOffset=1)
+cron.schedule('0 6 1 * *', () => {
     autoGenerateAndSendPayroll(31, 1);
 }, {
     scheduled: true,
     timezone: "Asia/Karachi"
 });
 
-// Auto-Payroll: Run on the 17th of every month at 2:00 AM PKT (Calculates for 1st-15th of Current Month)
-cron.schedule('0 2 17 * *', () => {
+// Auto-Payroll: 16th of every month at 6:00 AM PKT
+// Sends payroll for 1st–15th of CURRENT month (monthOffset=0)
+cron.schedule('0 6 16 * *', () => {
     autoGenerateAndSendPayroll(15, 0);
 }, {
     scheduled: true,
