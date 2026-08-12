@@ -319,6 +319,17 @@ const checkOut = async (req, res) => {
         if (user.status === 'Deleted') return res.status(400).json({ message: 'Deleted users cannot mark attendance' });
 
         const checkInTime = new Date(attendance.checkIn);
+
+        // Block checkout if less than 30 minutes have passed since checkIn
+        const thirtyMinsAfterCheckIn = new Date(checkInTime.getTime() + (30 * 60 * 1000));
+        if (pktNow < thirtyMinsAfterCheckIn) {
+            const remainingMs  = thirtyMinsAfterCheckIn - pktNow;
+            const remainingMin = Math.ceil(remainingMs / (1000 * 60));
+            return res.status(400).json({
+                message: `You cannot check out yet. Please wait ${remainingMin} more minute${remainingMin === 1 ? '' : 's'} before checking out.`
+            });
+        }
+
         let effectiveCheckOut = pktNow;
         
         // Check if the shift crosses midnight
