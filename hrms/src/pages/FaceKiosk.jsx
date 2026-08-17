@@ -20,7 +20,7 @@ const FaceKiosk = () => {
 
     useEffect(() => {
         const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-        
+
         const init = async () => {
             try {
                 await loadModels();
@@ -52,7 +52,7 @@ const FaceKiosk = () => {
         try {
             const res = await fetch(`${API_BASE_URL}/attendance/face-descriptors`);
             if (!res.ok) throw new Error('Failed to fetch descriptors');
-            
+
             const data = await res.json();
             if (!data.employees || data.employees.length === 0) {
                 setStatusMessage('No faces enrolled. Ask admin to enroll employees first.');
@@ -95,7 +95,7 @@ const FaceKiosk = () => {
 
     const speak = (text) => {
         let utteranceText = text;
-        
+
         // Handle dynamic messages
         if (text.includes('Welcome')) {
             const name = text.split('Welcome ')[1]?.split(',')[0] || '';
@@ -151,7 +151,7 @@ const FaceKiosk = () => {
             const resizedDetections = faceapi.resizeResults(detections, displaySize);
             const ctx = canvas.getContext('2d');
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            
+
             // Draw face recognition box (subtle)
             resizedDetections.forEach(det => {
                 const { box } = det.detection;
@@ -164,17 +164,17 @@ const FaceKiosk = () => {
                 setIsFaceDetected(true);
                 const detection = resizedDetections[0];
                 const { box } = detection.detection;
-                
+
                 // Define center zone
                 const centerX = displaySize.width / 2;
                 const centerY = displaySize.height / 2;
                 const faceCenterX = box.x + box.width / 2;
                 const faceCenterY = box.y + box.height / 2;
-                
+
                 // Check if face is roughly centered and large enough
-                const isCentered = Math.abs(faceCenterX - centerX) < 100 && 
-                                  Math.abs(faceCenterY - centerY) < 100 &&
-                                  box.width > 150;
+                const isCentered = Math.abs(faceCenterX - centerX) < 100 &&
+                    Math.abs(faceCenterY - centerY) < 100 &&
+                    box.width > 150;
 
                 setIsFaceCentered(isCentered);
 
@@ -188,12 +188,12 @@ const FaceKiosk = () => {
                     }
                 } else {
                     setInstruction('Hold Still...');
-                    
+
                     const match = faceMatcherRef.current.findBestMatch(detection.descriptor);
-                    
+
                     if (match.label !== 'unknown') {
                         const userId = match.label;
-                        
+
                         // Reliability check: require 2 consecutive matches for the same person
                         if (lastMatchedUserIdRef.current === userId) {
                             consecutiveMatchCountRef.current += 1;
@@ -237,9 +237,9 @@ const FaceKiosk = () => {
                     timestamp: new Date().toISOString()
                 })
             });
-            
+
             const data = await res.json();
-            
+
             if (res.ok) {
                 setStatusType('success');
                 if (data.action === 'checkin') {
@@ -304,7 +304,7 @@ const FaceKiosk = () => {
                         muted
                         className="h-full w-full object-cover scale-x-[-1]"
                     />
-                    
+
                     {/* Success/Error Overlay */}
                     {statusType === 'success' && (
                         <div className="absolute inset-0 z-50 bg-emerald-600/90 flex flex-col items-center justify-center animate-in fade-in zoom-in duration-300">
@@ -332,15 +332,15 @@ const FaceKiosk = () => {
                         <div className="face-corner face-corner-tr"></div>
                         <div className="face-corner face-corner-bl"></div>
                         <div className="face-corner face-corner-br"></div>
-                        
+
                         {/* Silhouette Placeholder (Visible when no face detected) */}
                         {!isFaceDetected && (
                             <div className="absolute inset-0 flex items-center justify-center opacity-20">
                                 <svg width="200" height="250" viewBox="0 0 200 250" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                    <path d="M100 230C150 230 180 190 180 130C180 70 144 20 100 20C56 20 20 70 20 130C20 190 50 230 100 230Z" stroke="white" strokeWidth="4"/>
-                                    <path d="M60 110C60 110 70 100 80 100" stroke="white" strokeWidth="4" strokeLinecap="round"/>
-                                    <path d="M140 110C140 110 130 100 120 100" stroke="white" strokeWidth="4" strokeLinecap="round"/>
-                                    <path d="M80 170C80 170 90 180 100 180C110 180 120 170 120 170" stroke="white" strokeWidth="4" strokeLinecap="round"/>
+                                    <path d="M100 230C150 230 180 190 180 130C180 70 144 20 100 20C56 20 20 70 20 130C20 190 50 230 100 230Z" stroke="white" strokeWidth="4" />
+                                    <path d="M60 110C60 110 70 100 80 100" stroke="white" strokeWidth="4" strokeLinecap="round" />
+                                    <path d="M140 110C140 110 130 100 120 100" stroke="white" strokeWidth="4" strokeLinecap="round" />
+                                    <path d="M80 170C80 170 90 180 100 180C110 180 120 170 120 170" stroke="white" strokeWidth="4" strokeLinecap="round" />
                                 </svg>
                             </div>
                         )}
@@ -348,7 +348,7 @@ const FaceKiosk = () => {
                         {/* Scanning Lines (Heavy) */}
                         <div className="scanner-line"></div>
                         <div className="scanner-line-secondary"></div>
-                        
+
                         {/* Center Instruction Overlay */}
                         {!isFaceCentered && (
                             <div className="absolute inset-0 flex items-center justify-center z-30">
@@ -360,7 +360,7 @@ const FaceKiosk = () => {
                                 </div>
                             </div>
                         )}
-                        
+
                         {isFaceCentered && (
                             <div className="absolute top-10 left-1/2 -translate-x-1/2 z-30">
                                 <div className="bg-emerald-500/20 backdrop-blur-md px-6 py-2 rounded-full border border-emerald-500/50">

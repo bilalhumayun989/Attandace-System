@@ -108,11 +108,11 @@ const UserDashboard = () => {
 
         const scan = async () => {
             if (!isScanning || !cameraActive || !faceMatcher || scanPause) return;
-            
+
             if (videoRef.current && videoRef.current.readyState === 4) {
                 try {
                     const displaySize = { width: videoRef.current.videoWidth, height: videoRef.current.videoHeight };
-                    
+
                     // Increase minConfidence from 0.2 to 0.6 to ignore blurry/partial faces
                     const detection = await faceapi.detectSingleFace(videoRef.current, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.6 }))
                         .withFaceLandmarks()
@@ -121,16 +121,16 @@ const UserDashboard = () => {
                     if (detection) {
                         setIsFaceDetected(true);
                         const { box } = detection.detection;
-                        
+
                         // Define center zone
                         const centerX = displaySize.width / 2;
                         const centerY = displaySize.height / 2;
                         const faceCenterX = box.x + box.width / 2;
                         const faceCenterY = box.y + box.height / 2;
-                        
-                        const isCentered = Math.abs(faceCenterX - centerX) < 100 && 
-                                          Math.abs(faceCenterY - centerY) < 100 &&
-                                          box.width > 120;
+
+                        const isCentered = Math.abs(faceCenterX - centerX) < 100 &&
+                            Math.abs(faceCenterY - centerY) < 100 &&
+                            box.width > 120;
 
                         setIsFaceCentered(isCentered);
 
@@ -163,7 +163,7 @@ const UserDashboard = () => {
                                 validationRef.current.count = 0;
                                 if (currentLabel !== 'unknown') {
                                     handleFaceDetection(currentLabel);
-                                    return; 
+                                    return;
                                 } else {
                                     setFaceStatus('User not registered');
                                     speak('User not registered');
@@ -187,7 +187,7 @@ const UserDashboard = () => {
                     console.error('Detection error:', error);
                 }
             }
-            
+
             // High-speed loop: 100ms (10 scans per second)
             if (isScanning && !scanPause) {
                 scanTimeout = setTimeout(scan, 100);
@@ -245,7 +245,7 @@ const UserDashboard = () => {
         if (scanPause) return;
         setScanPause(true);
         userCooldownsRef.current[detectedUserId] = Date.now();
-        
+
         try {
             const response = await fetch(`${API_BASE_URL}/attendance/face-checkin`, {
                 method: 'POST',
@@ -253,10 +253,10 @@ const UserDashboard = () => {
                 body: JSON.stringify({ userId: detectedUserId, timestamp: new Date().toISOString() })
             });
             const data = await response.json();
-            
+
             if (response.ok) {
                 let msg = data.message || '';
-                
+
                 if (data.action === 'checkin') {
                     const voiceMsg = msg.includes('Overtime') ? `Overtime started for ${data.employeeName}` : `Welcome ${data.employeeName}, Checked In`;
                     setMessage({ type: 'success', text: `${msg}: ${data.employeeName} at ${data.checkInTime}` });
@@ -275,7 +275,7 @@ const UserDashboard = () => {
                     setMessage({ type: 'error', text: msg });
                     speak(msg);
                 }
-                
+
                 fetchInitialData(false); // Silent background update
                 setTimeout(() => setMessage({ type: '', text: '' }), 5000);
             }
@@ -376,11 +376,10 @@ const UserDashboard = () => {
                         <button
                             key={btn.id}
                             disabled={true}
-                            className={`rounded-3xl flex flex-col items-center justify-center gap-4 transition-all duration-200 border-4 min-h-[150px] ${
-                                btn.active 
-                                ? `${btn.color} border-white/20 shadow-xl brightness-75` 
-                                : `${btn.color} border-white/5 opacity-40 grayscale`
-                            }`}
+                            className={`rounded-3xl flex flex-col items-center justify-center gap-4 transition-all duration-200 border-4 min-h-[150px] ${btn.active
+                                    ? `${btn.color} border-white/20 shadow-xl brightness-75`
+                                    : `${btn.color} border-white/5 opacity-40 grayscale`
+                                }`}
                         >
                             <span className="text-2xl md:text-3xl font-black uppercase tracking-widest text-center">{btn.label}</span>
                         </button>
@@ -406,7 +405,7 @@ const UserDashboard = () => {
                                     playsInline
                                     className="w-full h-full object-cover transition-all duration-500 scale-x-[-1]"
                                 />
-                                
+
                                 {/* Biometric Ring */}
                                 <div className={`biometric-ring !w-[280px] !h-[340px] ${isFaceCentered ? 'active' : ''}`}></div>
 
@@ -417,11 +416,11 @@ const UserDashboard = () => {
                                     <div className="face-corner face-corner-tr !w-8 !h-8 !border-t-4 !border-r-4"></div>
                                     <div className="face-corner face-corner-bl !w-8 !h-8 !border-b-4 !border-l-4"></div>
                                     <div className="face-corner face-corner-br !w-8 !h-8 !border-b-4 !border-r-4"></div>
-                                    
+
                                     {!isFaceDetected && (
                                         <div className="absolute inset-0 flex items-center justify-center opacity-10">
                                             <svg width="100" height="120" viewBox="0 0 200 250" fill="none">
-                                                <path d="M100 230C150 230 180 190 180 130C180 70 144 20 100 20C56 20 20 70 20 130C20 190 50 230 100 230Z" stroke="white" strokeWidth="8"/>
+                                                <path d="M100 230C150 230 180 190 180 130C180 70 144 20 100 20C56 20 20 70 20 130C20 190 50 230 100 230Z" stroke="white" strokeWidth="8" />
                                             </svg>
                                         </div>
                                     )}
@@ -470,9 +469,8 @@ const UserDashboard = () => {
             {/* Notification Toast */}
             {message.text && (
                 <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[100] w-full max-w-lg px-6 animate-in zoom-in-95 duration-300">
-                    <div className={`p-10 rounded-[2.5rem] border-4 shadow-[0_0_100px_rgba(0,0,0,0.5)] text-center ${
-                        message.type === 'success' ? 'bg-emerald-600 border-emerald-400' : 'bg-rose-600 border-rose-400'
-                    }`}>
+                    <div className={`p-10 rounded-[2.5rem] border-4 shadow-[0_0_100px_rgba(0,0,0,0.5)] text-center ${message.type === 'success' ? 'bg-emerald-600 border-emerald-400' : 'bg-rose-600 border-rose-400'
+                        }`}>
                         <h2 className="text-4xl font-black uppercase tracking-[0.2em] mb-2">{message.type === 'success' ? 'Success' : 'Error'}</h2>
                         <p className="text-xl font-bold uppercase tracking-widest opacity-90">{message.text}</p>
                     </div>
@@ -481,8 +479,8 @@ const UserDashboard = () => {
 
             {/* Logout button */}
             <div className="flex justify-center pb-2">
-                <button 
-                    onClick={() => { logout('Employee'); window.location.href = '/login'; }} 
+                <button
+                    onClick={() => { logout('Employee'); window.location.href = '/login'; }}
                     className="text-[10px] font-black text-white/20 uppercase tracking-[0.5em] hover:text-rose-500 transition-colors"
                 >
                     Logout System
