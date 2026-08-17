@@ -466,6 +466,10 @@ class KioskApp:
             detail = f"Check-Out Time:  {cout}" if cout else "See you next time!"
             self._show_ov(BLUE, '👋', 'GOODBYE!', name, detail)
 
+        elif action == 'too_soon':
+            speak(f"Please wait {name}. You cannot check out yet. {msg}")
+            self._show_ov(ORANGE, '⏳', 'PLEASE WAIT', name, msg)
+
         elif action == 'completed':
             speak(f"{name}, your shift for today is already complete. See you tomorrow.")
             self._show_ov(PURPLE, '🏁', 'SHIFT COMPLETE', name,

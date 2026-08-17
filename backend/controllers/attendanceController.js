@@ -230,14 +230,15 @@ const checkIn = async (req, res) => {
                 // Auto-close — preserve Present if a prior completed shift exists
                 const hasCompletedShifts = openShift.shifts && openShift.shifts.some(s => s.checkOut);
                 openShift.status = hasCompletedShifts ? 'Present' : 'Absent';
+                // Flag the open shift entry as missed
                 if (openShift.shifts && openShift.shifts.length > 0) {
                     const lastEntry = openShift.shifts[openShift.shifts.length - 1];
-                    if (lastEntry && !lastEntry.checkOut) lastEntry.missed = true;
+                    if (lastEntry && !lastEntry.checkOut) {
+                        lastEntry.missed = true;
+                    }
                 }
-                openShift.checkOut = openShift.checkIn;
+                openShift.checkOut = openShift.checkIn; // close it so it's no longer open
                 await openShift.save();
-                // Stop — do NOT silently check them in again, tell them to check in
-                return res.status(400).json({ message: 'Your previous shift expired after 20 hours. Please check in again.' });
             } else {
                 return res.status(400).json({ message: 'You have an ongoing shift. Please check out first.' });
             }
@@ -850,44 +851,34 @@ const faceCheckIn = async (req, res) => {
             checkOut: null
         }).sort({ checkIn: -1 });
 
-        // If open shift is older than 20 hours — close it as missed, do NOT auto check-in
+        // Check if open shift is older than 20 hours (missed checkout)
         if (openShift && openShift.checkIn < twentyHoursAgo) {
-            const hasCompletedShifts = openShift.shifts && openShift.shifts.some(s => s.checkOut);
-            openShift.status = hasCompletedShifts ? 'Present' : 'Absent';
-            openShift.checkOut = openShift.checkIn;
-            if (openShift.shifts && openShift.shifts.length > 0) {
-                const lastEntry = openShift.shifts[openShift.shifts.length - 1];
-                if (lastEntry && !lastEntry.checkOut) lastEntry.missed = true;
-            }
+            openShift.status = 'Absent'; // Missed checkout
             await openShift.save();
-            // Stop here — do NOT auto check-in the user
-            return res.status(400).json({
-                action: 'expired',
-                employeeName: user.name,
-                message: 'Previous shift expired. Please scan again to check in.'
-            });
+            openShift = null; // Clear it so we trigger a new check-in below
         }
 
         // --- REPEAT SCAN (Check-Out) ---
         if (openShift) {
             const checkInTime = new Date(openShift.checkIn);
 
-            // Enforce 30-minute minimum before checkout (use real UTC for comparison)
+            // Enforce minimum time before checkout (same rule as web checkout)
+            // Use real UTC now — checkIn stored as UTC in MongoDB
             const realNow = new Date();
-            const thirtyMinsAfterCheckIn = new Date(checkInTime.getTime() + (30 * 60 * 1000));
-            if (realNow < thirtyMinsAfterCheckIn) {
-                const remainingMs  = thirtyMinsAfterCheckIn - realNow;
+            const minMinutes = parseInt(process.env.FACE_MIN_CHECKOUT_MINUTES || '30', 10);
+            const minCheckoutTime = new Date(checkInTime.getTime() + (minMinutes * 60 * 1000));
+            if (realNow < minCheckoutTime) {
+                const remainingMs  = minCheckoutTime - realNow;
                 const remainingMin = Math.ceil(remainingMs / (1000 * 60));
-                return res.status(400).json({
+                return res.json({
                     action: 'too_soon',
                     employeeName: user.name,
-                    message: `Too early to check out. Please wait ${remainingMin} more minute${remainingMin === 1 ? '' : 's'}.`
+                    message: `Too soon to check out. Please wait ${remainingMin} more minute${remainingMin === 1 ? '' : 's'}.`
                 });
             }
 
-            let effectiveCheckOut = pktNow;
-
             const checkInDateStr = getPKTDateString(checkInTime);
+            let effectiveCheckOut = pktNow;
             const checkOutDateStr = getPKTDateString(effectiveCheckOut);
 
             if (checkInDateStr !== checkOutDateStr) {
@@ -974,21 +965,10 @@ const faceCheckIn = async (req, res) => {
         }
 
         // --- INITIAL SCAN (Check-In) ---
-        // Only check in if there is no open shift and no completed shift today
         let todayRecord = await Attendance.findOne({ userId, date: dateStr });
 
-        if (todayRecord && todayRecord.checkOut) {
-            // Already completed a shift today — do NOT re-open automatically
-            // User must explicitly check in again through the kiosk
-            // Treat this second scan as a new check-in for a second shift
-            todayRecord.checkIn = pktNow;
-            todayRecord.checkOut = null;
-            todayRecord.markedByFace = true;
-            if (!todayRecord.shifts) todayRecord.shifts = [];
-            todayRecord.shifts.push({ checkIn: pktNow, checkOut: null, duration: 0 });
-            await todayRecord.save();
-        } else if (!todayRecord) {
-            todayRecord = new Attendance({
+        if (!todayRecord) {
+            let attendance = new Attendance({
                 userId,
                 date: dateStr,
                 checkIn: pktNow,
@@ -996,12 +976,11 @@ const faceCheckIn = async (req, res) => {
                 adminId: user.adminId,
                 markedByFace: true
             });
-            await todayRecord.save();
+            await attendance.save();
         } else {
-            // todayRecord exists but no checkOut — already checked in, open shift missing
-            // Just update the checkIn time
+            // Already checked out today, start new shift
             todayRecord.checkIn = pktNow;
-            todayRecord.checkOut = null;
+            todayRecord.checkOut = null; // Open new shift
             todayRecord.markedByFace = true;
             await todayRecord.save();
         }

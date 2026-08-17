@@ -13,6 +13,7 @@ STRICT_THRESHOLD = 0.38      # High-confidence threshold
 DETECTION_CONFIDENCE = 0.6
 VALIDATION_FRAMES = 5        # Increased for temporal stability (approx 1 sec)
 COOLDOWN_MINUTES = 5
+FACE_MIN_CHECKOUT_MINUTES = 30   # Employee must wait this long after check-in before checkout is allowed
 
 # Liveness Detection (Anti-Spoofing)
 LIVENESS_ENABLED = True
