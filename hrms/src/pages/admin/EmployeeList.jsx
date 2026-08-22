@@ -165,6 +165,38 @@ const EmployeeList = () => {
         }
     };
 
+    const handleRestoreUser = async (id) => {
+        setLoading(true);
+        setMessage({ type: '', text: '' });
+        try {
+            const response = await fetch(`${API_BASE_URL}/users/${id}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Role-Context': 'Admin'
+                },
+                credentials: 'include',
+                body: JSON.stringify({ status: 'Active' }),
+            });
+
+            if (response.ok) {
+                setMessage({ type: 'success', text: 'Employee restored successfully! Please re-enroll their face.' });
+                fetchEmployees();
+                setTimeout(() => {
+                    setIsEditModalOpen(false);
+                    resetForm();
+                }, 2000);
+            } else {
+                const data = await response.json();
+                setMessage({ type: 'error', text: data.message || 'Failed to restore employee' });
+            }
+        } catch (error) {
+            setMessage({ type: 'error', text: 'Error connecting to server' });
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const handleDeleteEmployee = async (id) => {
         if (!window.confirm('Are you sure you want to delete this employee?')) return;
 
@@ -319,7 +351,7 @@ const EmployeeList = () => {
                                         <td className="p-4 align-middle text-right">
                                             <div className="flex justify-end gap-2">
                                                 {can('employees', 'edit') && (
-                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-primary disabled:opacity-50" disabled={employee.status === 'Deleted'} onClick={() => handleEditClick(employee)}>
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-primary disabled:opacity-50" onClick={() => handleEditClick(employee)}>
                                                         <Edit2 className="h-4 w-4" />
                                                     </Button>
                                                 )}
@@ -346,7 +378,7 @@ const EmployeeList = () => {
                 footer={
                     <>
                         <Button variant="ghost" onClick={() => { setIsAddModalOpen(false); setIsEditModalOpen(false); resetForm(); }} disabled={loading}>Cancel</Button>
-                        <Button onClick={isEditModalOpen ? handleUpdateEmployee : handleCreateEmployee} disabled={loading}>
+                        <Button onClick={isEditModalOpen ? handleUpdateEmployee : handleCreateEmployee} disabled={loading || (isEditModalOpen && editingEmployee?.status === 'Deleted')}>
                             {loading ? (isEditModalOpen ? 'Updating...' : 'Creating...') : (isEditModalOpen ? 'Save Changes' : 'Create Employee')}
                         </Button>
                     </>
@@ -371,22 +403,22 @@ const EmployeeList = () => {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                         <div className="space-y-2">
                             <label className="text-sm font-bold text-foreground/80">First Name</label>
-                            <Input name="firstName" value={formData.firstName} onChange={handleInputChange} placeholder="John" className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all" />
+                            <Input name="firstName" value={formData.firstName} onChange={handleInputChange} placeholder="John" disabled={isEditModalOpen && editingEmployee?.status === 'Deleted'} className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all disabled:opacity-60" />
                         </div>
                         <div className="space-y-2">
                             <label className="text-sm font-bold text-foreground/80">Last Name</label>
-                            <Input name="lastName" value={formData.lastName} onChange={handleInputChange} placeholder="Doe" className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all" />
+                            <Input name="lastName" value={formData.lastName} onChange={handleInputChange} placeholder="Doe" disabled={isEditModalOpen && editingEmployee?.status === 'Deleted'} className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all disabled:opacity-60" />
                         </div>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                         <div className="space-y-2">
                             <label className="text-sm font-bold text-foreground/80">Department</label>
-                            <Input name="department" value={formData.department} onChange={handleInputChange} placeholder="Engineering" className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all" />
+                            <Input name="department" value={formData.department} onChange={handleInputChange} placeholder="Engineering" disabled={isEditModalOpen && editingEmployee?.status === 'Deleted'} className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all disabled:opacity-60" />
                         </div>
                         <div className="space-y-2">
                             <label className="text-sm font-bold text-foreground/80">Role / Title</label>
-                            <Input name="role" value={formData.role} onChange={handleInputChange} placeholder="Developer" className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all" />
+                            <Input name="role" value={formData.role} onChange={handleInputChange} placeholder="Developer" disabled={isEditModalOpen && editingEmployee?.status === 'Deleted'} className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all disabled:opacity-60" />
                         </div>
                     </div>
 
@@ -400,7 +432,8 @@ const EmployeeList = () => {
                                 onChange={handleInputChange}
                                 placeholder="e.g. 25000"
                                 min="0"
-                                className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all"
+                                disabled={isEditModalOpen && editingEmployee?.status === 'Deleted'}
+                                className="bg-muted/30 border-muted-foreground/20 focus:bg-background transition-all disabled:opacity-60"
                             />
                             <p className="text-xs text-muted-foreground">Base monthly salary used for payroll calculation.</p>
                         </div>
@@ -421,8 +454,9 @@ const EmployeeList = () => {
                                 <button
                                     key={day.value}
                                     type="button"
+                                    disabled={isEditModalOpen && editingEmployee?.status === 'Deleted'}
                                     onClick={(e) => { e.stopPropagation(); setSelectedOffDay(day.value); }}
-                                    className={`px-4 py-2 rounded-lg text-xs font-bold transition-all border ${selectedOffDay === day.value
+                                    className={`px-4 py-2 rounded-lg text-xs font-bold transition-all border disabled:opacity-60 disabled:cursor-not-allowed ${selectedOffDay === day.value
                                             ? 'bg-primary text-primary-foreground border-primary shadow-md'
                                             : 'bg-background text-muted-foreground border-border hover:border-primary/50'
                                         }`}
@@ -434,7 +468,7 @@ const EmployeeList = () => {
                         <p className="text-xs text-muted-foreground">If employee works on this day, they earn 1.5× daily salary.</p>
                     </div>
 
-                    {adminUser?.role === 'SuperAdmin' && (
+                    {adminUser?.role === 'SuperAdmin' && editingEmployee?.status !== 'Deleted' && (
                         <div className="pt-4 mt-6 border-t border-rose-200/50 space-y-4">
                             <h3 className="text-sm font-bold text-rose-600 flex items-center gap-2">
                                 <Trash2 className="h-4 w-4" /> Danger Zone
@@ -461,6 +495,23 @@ const EmployeeList = () => {
                                     <Trash2 className="h-4 w-4 mr-2" /> Delete Employee Permanently
                                 </Button>
                             </div>
+                        </div>
+                    )}
+
+                    {isEditModalOpen && editingEmployee?.status === 'Deleted' && (
+                        <div className="pt-4 mt-6 border-t border-emerald-200/50 space-y-4">
+                            <h3 className="text-sm font-bold text-emerald-600 flex items-center gap-2">
+                                Restore Employee
+                            </h3>
+                            <p className="text-xs text-muted-foreground">This user is currently deleted. Restoring them will require their face to be re-enrolled.</p>
+                            <Button
+                                type="button"
+                                className="bg-emerald-600 hover:bg-emerald-700 w-full sm:w-auto text-white"
+                                onClick={() => handleRestoreUser(editingEmployee._id)}
+                                disabled={loading}
+                            >
+                                Restore User
+                            </Button>
                         </div>
                     )}
                 </div>

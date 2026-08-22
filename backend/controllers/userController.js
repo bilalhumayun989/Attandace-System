@@ -487,6 +487,14 @@ const updateUser = async (req, res) => {
                 user.offDays = req.body.offDays && Array.isArray(req.body.offDays) ? req.body.offDays : user.offDays;
                 console.log('[updateUser] Saving offDays:', user.offDays, '| received:', req.body.offDays);
                 user.customRole = req.body.customRole !== undefined ? req.body.customRole : user.customRole;
+                
+                if (req.body.status) {
+                    if (user.status === 'Deleted' && req.body.status === 'Active') {
+                        user.faceEnrolled = false;
+                        user.faceDescriptors = [];
+                    }
+                    user.status = req.body.status;
+                }
             } else if (isSelf) {
                 // Allow self-update for name and email, but prevent sensitive fields
                 user.name = req.body.name || user.name;
