@@ -30,13 +30,11 @@ mongoose.connect(process.env.MONGO_URI)
                     const checkOutTime = new Date(shift.checkOut);
 
                     // midnight of inDay
-                    const midnight = new Date(checkInTime);
-                    midnight.setHours(23, 59, 59, 999);
+                    const midnight = new Date(`${inDay}T23:59:59.999+05:00`);
 
                     const day1Mins = Math.max(0, Math.floor((midnight - checkInTime) / 60000));
                     
-                    const nextDayStart = new Date(checkOutTime);
-                    nextDayStart.setHours(0, 0, 0, 0);
+                    const nextDayStart = new Date(`${outDay}T00:00:00.000+05:00`);
                     const day2Mins = Math.max(0, Math.floor((checkOutTime - nextDayStart) / 60000));
 
                     console.log(`Fixing record ${record._id} (${record.date}): shift ${i} crosses midnight. Day1: ${day1Mins}m | Day2: ${day2Mins}m`);

@@ -91,11 +91,9 @@ const reconcileAttendance = async (userId) => {
         current = new Date(user.createdAt);
     }
 
-    const yesterday = new Date(pktNow);
-    yesterday.setDate(yesterday.getDate() - 1);
-    yesterday.setHours(0, 0, 0, 0);
-
-    const yesterdayStr = getPKTDateString(yesterday);
+    const yesterdayDate = new Date(pktNow.getTime() - 86400000);
+    const yesterdayStr = getPKTDateString(yesterdayDate);
+    const yesterday = new Date(`${yesterdayStr}T00:00:00.000+05:00`);
 
     if (current > yesterday) return;
 
@@ -143,11 +141,9 @@ const reconcileMultipleUsersAttendance = async (users) => {
     const pktNow = getPKTTime();
     const todayStr = getPKTDateString(pktNow);
 
-    const yesterday = new Date(pktNow);
-    yesterday.setDate(yesterday.getDate() - 1);
-    yesterday.setHours(0, 0, 0, 0);
-
-    const yesterdayStr = getPKTDateString(yesterday);
+    const yesterdayDate = new Date(pktNow.getTime() - 86400000);
+    const yesterdayStr = getPKTDateString(yesterdayDate);
+    const yesterday = new Date(`${yesterdayStr}T00:00:00.000+05:00`);
 
     try {
         const userIds = users.map(u => u._id);
@@ -320,17 +316,6 @@ const checkOut = async (req, res) => {
 
         const checkInTime = new Date(attendance.checkIn);
 
-        // Block checkout if less than 30 minutes have passed since checkIn
-        // Use real UTC now (new Date()) for comparison — checkIn is stored as UTC in MongoDB
-        const realNow = new Date();
-        const thirtyMinsAfterCheckIn = new Date(checkInTime.getTime() + (30 * 60 * 1000));
-        if (realNow < thirtyMinsAfterCheckIn) {
-            const remainingMs = thirtyMinsAfterCheckIn - realNow;
-            const remainingMin = Math.ceil(remainingMs / (1000 * 60));
-            return res.status(400).json({
-                message: `You cannot check out yet. Please wait ${remainingMin} more minute${remainingMin === 1 ? '' : 's'} before checking out.`
-            });
-        }
 
         let effectiveCheckOut = pktNow;
 
@@ -862,29 +847,13 @@ const faceCheckIn = async (req, res) => {
         if (openShift) {
             const checkInTime = new Date(openShift.checkIn);
 
-            // Enforce minimum time before checkout (same rule as web checkout)
-            // Use real UTC now — checkIn stored as UTC in MongoDB
-            const realNow = new Date();
-            const minMinutes = parseInt(process.env.FACE_MIN_CHECKOUT_MINUTES || '30', 10);
-            const minCheckoutTime = new Date(checkInTime.getTime() + (minMinutes * 60 * 1000));
-            if (realNow < minCheckoutTime) {
-                const remainingMs  = minCheckoutTime - realNow;
-                const remainingMin = Math.ceil(remainingMs / (1000 * 60));
-                return res.json({
-                    action: 'too_soon',
-                    employeeName: user.name,
-                    message: `Too soon to check out. Please wait ${remainingMin} more minute${remainingMin === 1 ? '' : 's'}.`
-                });
-            }
-
             const checkInDateStr = getPKTDateString(checkInTime);
             let effectiveCheckOut = pktNow;
             const checkOutDateStr = getPKTDateString(effectiveCheckOut);
 
             if (checkInDateStr !== checkOutDateStr) {
                 // Crosses midnight! Split the hours.
-                const midnight = new Date(checkInTime);
-                midnight.setHours(23, 59, 59, 999);
+                const midnight = new Date(`${checkInDateStr}T23:59:59.999+05:00`);
 
                 const durationMsDay1 = midnight - checkInTime;
                 const durationMinsDay1 = Math.floor(durationMsDay1 / (1000 * 60));
@@ -906,8 +875,7 @@ const faceCheckIn = async (req, res) => {
                 }
                 await openShift.save();
 
-                const nextDayStart = new Date(effectiveCheckOut);
-                nextDayStart.setHours(0, 0, 0, 0);
+                const nextDayStart = new Date(`${checkOutDateStr}T00:00:00.000+05:00`);
 
                 const durationMsDay2 = effectiveCheckOut - nextDayStart;
                 const durationMinsDay2 = Math.floor(durationMsDay2 / (1000 * 60));
