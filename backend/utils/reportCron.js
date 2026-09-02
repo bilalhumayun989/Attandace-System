@@ -19,11 +19,12 @@ const runAutoCheckOut = async () => {
         const pktNow = getPKTTime();
         const twentyHoursAgo = new Date(pktNow.getTime() - (20 * 60 * 60 * 1000));
 
-        // Only find shifts that are still open (not yet marked Absent) and older than 20 hours
+        // Only find shifts that are still open (not yet marked Absent/missed) and older than 20 hours
         const openShifts = await Attendance.find({
             checkIn: { $ne: null, $lt: twentyHoursAgo },
             checkOut: null,
-            status: { $nin: ['Absent', 'On Leave'] } // skip already processed records
+            status: { $nin: ['Absent', 'On Leave'] }, // skip already processed records
+            'shifts.missed': { $ne: true } // skip records we already marked as missed
         });
 
         if (openShifts.length > 0) {
@@ -41,8 +42,7 @@ const runAutoCheckOut = async () => {
                     }
                 }
 
-                // Close the open shift so it isn't picked up again
-                record.checkOut = record.checkIn; 
+                // We no longer set record.checkOut = record.checkIn; so it remains null (missing checkout)
                 record.isCheckingOut = false;
                 await record.save();
             }
