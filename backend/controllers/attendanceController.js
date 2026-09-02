@@ -90,6 +90,9 @@ const reconcileAttendance = async (userId) => {
     if (isNaN(current.getTime())) {
         current = new Date(user.createdAt);
     }
+    // Normalize current to midnight PKT
+    const currentStr = getPKTDateString(current);
+    current = new Date(`${currentStr}T00:00:00.000+05:00`);
 
     const yesterdayDate = new Date(pktNow.getTime() - 86400000);
     const yesterdayStr = getPKTDateString(yesterdayDate);
@@ -167,6 +170,9 @@ const reconcileMultipleUsersAttendance = async (users) => {
             if (isNaN(current.getTime())) {
                 current = new Date(user.createdAt);
             }
+            // Normalize current to midnight PKT
+            const currentStr = getPKTDateString(current);
+            current = new Date(`${currentStr}T00:00:00.000+05:00`);
 
             if (current > yesterday) continue;
 
@@ -846,6 +852,15 @@ const faceCheckIn = async (req, res) => {
         // --- REPEAT SCAN (Check-Out) ---
         if (openShift) {
             const checkInTime = new Date(openShift.checkIn);
+            
+            const timeDiffMins = (pktNow.getTime() - checkInTime.getTime()) / (1000 * 60);
+            if (timeDiffMins < 30) {
+                return res.json({
+                    action: 'too_soon',
+                    employeeName: user.name,
+                    message: `Please wait ${Math.ceil(30 - timeDiffMins)} more minutes before checking out.`
+                });
+            }
 
             const checkInDateStr = getPKTDateString(checkInTime);
             let effectiveCheckOut = pktNow;
@@ -950,6 +965,7 @@ const faceCheckIn = async (req, res) => {
             todayRecord.checkIn = pktNow;
             todayRecord.checkOut = null; // Open new shift
             todayRecord.markedByFace = true;
+            todayRecord.status = 'Present'; // Override any prior Absent status
             await todayRecord.save();
         }
 
