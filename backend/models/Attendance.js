@@ -33,9 +33,16 @@ const attendanceSchema = new mongoose.Schema(
             type: [shiftSessionSchema],
             default: [],
         },
+        employee: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+        },
+        action: {
+            type: String,
+        },
         status: {
             type: String,
-            enum: ['Present', 'Late', 'Absent', 'Short Hours', 'On Leave'],
+            enum: ['Present', 'Late', 'Absent', 'Short Hours', 'On Leave', 'checked_in', 'checked_out'],
             default: 'Present',
         },
         isCheckingOut: {

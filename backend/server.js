@@ -25,8 +25,8 @@ const app = express();
 
 const allowedOrigins = [
     // Extract just origin (scheme+host) from FRONTEND_URL, strip any path
-    process.env.FRONTEND_URL 
-        ? new URL(process.env.FRONTEND_URL).origin 
+    process.env.FRONTEND_URL
+        ? new URL(process.env.FRONTEND_URL).origin
         : null,
     'http://localhost:5173'
 ].filter(Boolean);
@@ -35,7 +35,7 @@ app.use(cors({
     origin: (origin, callback) => {
         // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
-        
+
         const sanitizedOrigin = origin.replace(/\/$/, '');
         if (allowedOrigins.includes(sanitizedOrigin)) {
             callback(null, true);
@@ -57,9 +57,9 @@ app.use(async (req, res, next) => {
         await connectDB();
         next();
     } catch (err) {
-        return res.status(500).json({ 
-            message: 'Database connection failed. Please check Vercel environment variables and MongoDB IP Whitelist.', 
-            error: err.message 
+        return res.status(500).json({
+            message: 'Database connection failed. Please check Vercel environment variables and MongoDB IP Whitelist.',
+            error: err.message
         });
     }
 });
@@ -67,6 +67,7 @@ app.use(async (req, res, next) => {
 // Routes
 app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/attendance', require('./routes/attendanceRoutes'));
+app.use('/api/attendance', require('./routes/attendanceFingerprint.routes')); // Added fingerprint routes to same base path
 app.use('/api/payroll', require('./routes/payrollRoutes'));
 app.use('/api/admin-leave', require('./routes/leaveRoutes'));
 app.use('/api/cron', require('./routes/cronRoutes'));

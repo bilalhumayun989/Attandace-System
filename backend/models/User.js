@@ -94,6 +94,10 @@ const userSchema = new mongoose.Schema(
             type: [[Number]],
             default: [],
         },
+        fingerprintTemplate: {
+            type: String,
+            default: null,
+        },
         faceEnrolled: {
             type: Boolean,
             default: false,
