@@ -125,16 +125,17 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
             if (isBeforeJoin) {
                 // If admin added attendance before join, count as present; else absent.
                 if (record && record.checkIn && record.checkOut) {
-                    // Evaluate as normal present day
                     const worked = record.duration || 0;
-                    let dayEarnedSalary = perDaySalary;
+                    let dayEarnedSalary = 0;
                     let dayPayLabel = 'Pre-Join Present';
                     let baseMinutes = worked;
                     presentDays++;
 
                     if (worked > 11 * 60) {
-                        dayEarnedSalary = perDaySalary + overtimePay;
-                        dayPayLabel = 'Pre-Join Present (Full Day + Overtime)';
+                        dayEarnedSalary = overtimePay;
+                        dayPayLabel = 'Pre-Join Present (Overtime Day)';
+                        totalOvertimeMinutes += (worked - 11 * 60);
+                        totalOvertimePay += overtimePay;
                     } else if (worked > 6 * 60) {
                         dayEarnedSalary = perDaySalary;
                         dayPayLabel = 'Pre-Join Present (Full Day)';
@@ -149,8 +150,8 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                         date: dateString,
                         status: dayPayLabel + labelSuffix,
                         workMinutes: baseMinutes,
-                        baseDaySalary: Math.round(dayEarnedSalary - (worked > 11 * 60 ? overtimePay : 0)),
-                        overtimePay: worked > 11 * 60 ? Math.round(overtimePay) : 0,
+                        baseDaySalary: baseMinutes > 11 * 60 ? 0 : Math.round(dayEarnedSalary),
+                        overtimePay: baseMinutes > 11 * 60 ? Math.round(overtimePay) : 0,
                         earnedSalary: Math.round(dayEarnedSalary)
                     });
                 } else {
@@ -176,14 +177,16 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
 
 
 
-            // ── OFF DAY ──────────────────────────────────────────────────────────
-            // Off day pays a full day ONLY IF the employee was not absent on their last working day.
-            // If they were absent, the off day is unpaid.
-            // If employee works on off day, apply bracket rules.
+            // ── OFF DAY (Friday / Vacation) ──────────────────────────────────
+            // All off-day pay uses salary/26 rate with brackets:
+            //   No show / missed checkout → Rs 0
+            //   ≤ 6h  → salary/26 × 0.5
+            //   > 6h ≤ 11h → salary/26 × 1
+            //   > 11h → salary/26 × 1.5
             if (isOffDay && !isBeforeJoin) {
                 offDaysPassed++;
-                let dayEarnedSalary = (lastWorkingDayStatus === 'Absent') ? 0 : perDaySalary;
-                let dayPayLabel = (lastWorkingDayStatus === 'Absent') ? 'Off Day (Unpaid due to absence)' : 'Off Day';
+                let dayEarnedSalary = 0;
+                let dayPayLabel = 'Off Day (Absent)';
                 let baseMinutes = 0;
 
                 if (record && record.checkIn && record.checkOut) {
@@ -192,77 +195,51 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                     presentDays++;
 
                     if (worked > 11 * 60) {
-                        // Off day overtime: salary/26 replaces normal rate
-                        dayEarnedSalary = overtimePay;
-                        dayPayLabel = 'Off Day (Overtime)';
+                        dayEarnedSalary = overtimePay * 1.5;
+                        dayPayLabel = 'Off Day (Overtime — 1.5x)';
+                        totalOvertimeMinutes += (worked - 11 * 60);
+                        totalOvertimePay += overtimePay * 1.5;
                     } else if (worked > 6 * 60) {
-                        // > 6h ≤ 11h → full day (same as off-day floor, no extra)
-                        dayEarnedSalary = perDaySalary;
-                        dayPayLabel = 'Off Day (Worked — Full Day)';
+                        dayEarnedSalary = overtimePay;
+                        dayPayLabel = 'Off Day (Full Day — /26)';
                     } else {
-                        // ≤ 6h → half-day work but off-day floor keeps it at full day
-                        dayEarnedSalary = perDaySalary;
-                        dayPayLabel = 'Off Day (Worked — Half Day, Off Day Rate Applied)';
+                        dayEarnedSalary = overtimePay * 0.5;
+                        dayPayLabel = 'Off Day (Half Day — /26)';
                     }
-                } else if (record && record.checkIn && !record.checkOut) {
-                    // Checked in but no checkout on off day — still pay off-day rate
-                    dayEarnedSalary = perDaySalary;
-                    dayPayLabel = isVacation ? 'Vacation (Missed Checkout)' : 'Off Day (Missed Checkout)';
+                    lastWorkingDayStatus = 'Present';
+                } else {
+                    // No show or missed checkout on off day → Rs 0
+                    dayEarnedSalary = 0;
+                    lastWorkingDayStatus = 'Absent';
                 }
-                // No record at all → default off-day pay already set above
 
                 totalEarnedSalary += dayEarnedSalary;
                 dailyBreakdown.push({
                     date: dateString,
                     status: dayPayLabel + labelSuffix,
                     workMinutes: baseMinutes,
-                    baseDaySalary: baseMinutes > 11 * 60 ? 0 : Math.round(dayEarnedSalary),
-                    overtimePay: baseMinutes > 11 * 60 ? Math.round(overtimePay) : 0,
+                    baseDaySalary: 0,
+                    overtimePay: Math.round(dayEarnedSalary),
                     earnedSalary: Math.round(dayEarnedSalary)
                 });
                 loopDate.setDate(loopDate.getDate() + 1);
                 continue;
             }
 
-            // ── EXPLICIT LEAVE STATUSES ──────────────────────────────────────────
-            if (record && record.status === 'On Leave') {
-                totalLeavesTaken += 1;
-                totalEarnedSalary += perDaySalary;
-                lastWorkingDayStatus = 'Present'; // Treat paid leave as present for off-day sandwich rule
-
+            // ── ABSENT / ON LEAVE → always Rs 0, no paid leave system ──────────
+            if (record && (record.status === 'On Leave' || record.status === 'Absent')) {
+                totalAbsents += 1;
+                actualAbsents += 1;
+                absentDeductionAmount += perDaySalary;
+                lastWorkingDayStatus = 'Absent';
                 dailyBreakdown.push({
                     date: dateString,
-                    status: 'On Leave' + labelSuffix,
+                    status: record.status + labelSuffix,
                     workMinutes: 0,
-                    baseDaySalary: Math.round(perDaySalary),
+                    baseDaySalary: 0,
                     overtimePay: 0,
-                    earnedSalary: Math.round(perDaySalary)
-                });
-                loopDate.setDate(loopDate.getDate() + 1);
-                continue;
-            }
-
-            if (record && record.status === 'Absent') {
-                // Explicitly marked Absent — check leave quota
-                let isPaidLeave = false;
-                if (totalLeavesTaken < (user.leaveQuota || 0)) {
-                    totalLeavesTaken += 1;
-                    isPaidLeave = true;
-                    totalEarnedSalary += perDaySalary;
-                    lastWorkingDayStatus = 'Present'; // Paid leave preserves off-day pay
-                } else {
-                    totalAbsents += 1;
-                    absentDeductionAmount += perDaySalary;
-                    lastWorkingDayStatus = 'Absent';
-                }
-                dailyBreakdown.push({
-                    date: dateString,
-                    status: (isPaidLeave ? 'Paid Leave' : 'Absent') + labelSuffix,
-                    workMinutes: 0,
-                    baseDaySalary: isPaidLeave ? Math.round(perDaySalary) : 0,
-                    overtimePay: 0,
-                    earnedSalary: isPaidLeave ? Math.round(perDaySalary) : 0,
-                    deduction: isPaidLeave ? 0 : Math.round(perDaySalary)
+                    earnedSalary: 0,
+                    deduction: Math.round(perDaySalary)
                 });
                 loopDate.setDate(loopDate.getDate() + 1);
                 continue;
