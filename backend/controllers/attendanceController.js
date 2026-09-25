@@ -546,18 +546,20 @@ const addCustomAttendance = async (req, res) => {
         };
 
         const checkInDateStr = getPKTDateString(checkInDate);
-        const checkOutDateStr = checkOutDate ? getPKTDateString(checkOutDate) : checkInDateStr;
+        const checkInWorkDay  = getWorkDayDateString(checkInDate);
+        const checkOutWorkDay = checkOutDate ? getWorkDayDateString(checkOutDate) : checkInWorkDay;
 
         let returnedAttendance;
 
-        if (checkOutDate && checkInDateStr !== checkOutDateStr) {
-            // Crosses midnight! Split the hours.
-            const midnight = new Date(`${checkInDateStr}T23:59:59.999+05:00`);
+        if (checkOutDate && checkInWorkDay !== checkOutWorkDay) {
+            // Crosses 6 AM boundary — split at 6 AM of the checkout calendar day
+            const checkOutCalDate = getPKTDateString(checkOutDate);
+            const splitPoint = getSixAMSplit(checkOutCalDate); // 6 AM PKT
 
-            const durationMsDay1 = midnight - checkInDate;
-            const durationMinsDay1 = Math.floor(durationMsDay1 / (1000 * 60));
+            const durationMinsDay1 = Math.floor((splitPoint - checkInDate) / (1000 * 60));
+            const durationMinsDay2 = Math.floor((checkOutDate - splitPoint) / (1000 * 60));
 
-            // DAY 1
+            // DAY 1 — work day of checkIn
             let attendanceDay1 = await Attendance.findOne({ userId, date: checkInDateStr });
             if (!attendanceDay1) {
                 attendanceDay1 = new Attendance({
@@ -565,32 +567,29 @@ const addCustomAttendance = async (req, res) => {
                 });
             }
             if (!attendanceDay1.shifts) attendanceDay1.shifts = [];
-            attendanceDay1.shifts.push({ checkIn: checkInDate, checkOut: midnight, duration: durationMinsDay1 > 0 ? durationMinsDay1 : 0 });
+            attendanceDay1.shifts.push({ checkIn: checkInDate, checkOut: splitPoint, duration: durationMinsDay1 > 0 ? durationMinsDay1 : 0 });
             attendanceDay1.isCustom = true;
             if (status) attendanceDay1.status = status;
             recalculateAttendance(attendanceDay1);
             await attendanceDay1.save();
 
-            // DAY 2
-            const nextDayStart = new Date(`${checkOutDateStr}T00:00:00.000+05:00`);
+            // DAY 2 — new work day starting at 6 AM
+            const durationMsDay2 = checkOutDate - splitPoint;
 
-            const durationMsDay2 = checkOutDate - nextDayStart;
-            const durationMinsDay2 = Math.floor(durationMsDay2 / (1000 * 60));
-
-            let attendanceDay2 = await Attendance.findOne({ userId, date: checkOutDateStr });
+            let attendanceDay2 = await Attendance.findOne({ userId, date: checkOutCalDate });
             if (!attendanceDay2) {
                 attendanceDay2 = new Attendance({
-                    userId, adminId: req.adminId, date: checkOutDateStr, status: status || 'Present', isCustom: true, shifts: []
+                    userId, adminId: req.adminId, date: checkOutCalDate, status: status || 'Present', isCustom: true, shifts: []
                 });
             }
             if (!attendanceDay2.shifts) attendanceDay2.shifts = [];
-            attendanceDay2.shifts.push({ checkIn: nextDayStart, checkOut: checkOutDate, duration: durationMinsDay2 > 0 ? durationMinsDay2 : 0 });
+            attendanceDay2.shifts.push({ checkIn: splitPoint, checkOut: checkOutDate, duration: durationMinsDay2 > 0 ? durationMinsDay2 : 0 });
             attendanceDay2.isCustom = true;
             if (status) attendanceDay2.status = status;
             recalculateAttendance(attendanceDay2);
             await attendanceDay2.save();
 
-            returnedAttendance = attendanceDay2; // return the last day's attendance
+            returnedAttendance = attendanceDay2;
         } else {
             // Same Day (or no checkout yet)
             let attendance = await Attendance.findOne({ userId, date: checkInDateStr });
