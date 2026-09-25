@@ -87,7 +87,6 @@ const getWorkDayDateString = (date = new Date()) => {
 const getSixAMSplit = (dateStr) => {
     return new Date(`${dateStr}T06:00:00+05:00`);
 };
-};
 
 // Helper to format 24h to 12h AM/PM
 const format12h = (time24) => {
