@@ -54,9 +54,7 @@ const triggerManualReport = async (req, res) => {
 
 // Helper to get current PKT time
 const getPKTTime = (date = new Date()) => {
-    // If date is a string and doesn't contain timezone info, assume it's PKT
     if (typeof date === 'string' && !date.includes('Z') && !date.includes('+') && !date.includes('-')) {
-        // Append PKT offset (+05:00)
         date = date + '+05:00';
     }
     return new Date(formatInTimeZone(new Date(date), 'Asia/Karachi', "yyyy-MM-dd'T'HH:mm:ssXXX"));
@@ -64,6 +62,31 @@ const getPKTTime = (date = new Date()) => {
 
 const getPKTDateString = (date = new Date()) => {
     return formatInTimeZone(date, 'Asia/Karachi', 'yyyy-MM-dd');
+};
+
+/**
+ * Work-day boundary is 6:00 AM PKT (not midnight).
+ * Any time from 00:00–05:59 PKT belongs to the PREVIOUS calendar day's work shift.
+ * Returns the YYYY-MM-DD string of the work day this timestamp belongs to.
+ */
+const getWorkDayDateString = (date = new Date()) => {
+    const pktHour = parseInt(formatInTimeZone(date, 'Asia/Karachi', 'HH'), 10);
+    if (pktHour < 6) {
+        // Before 6 AM — belongs to previous calendar day's work shift
+        const prev = new Date(date);
+        prev.setTime(prev.getTime() - (6 * 60 * 60 * 1000)); // subtract 6 hours to land on previous day
+        return formatInTimeZone(prev, 'Asia/Karachi', 'yyyy-MM-dd');
+    }
+    return formatInTimeZone(date, 'Asia/Karachi', 'yyyy-MM-dd');
+};
+
+/**
+ * Returns the 6 AM PKT split point for a given calendar date string (YYYY-MM-DD).
+ * This is the boundary between two work days.
+ */
+const getSixAMSplit = (dateStr) => {
+    return new Date(`${dateStr}T06:00:00+05:00`);
+};
 };
 
 // Helper to format 24h to 12h AM/PM
@@ -325,59 +348,55 @@ const checkOut = async (req, res) => {
 
         let effectiveCheckOut = pktNow;
 
-        // Check if the shift crosses midnight
-        const checkInDateStr = getPKTDateString(checkInTime);
-        const checkOutDateStr = getPKTDateString(effectiveCheckOut);
+        // Check if the shift crosses the 6 AM work-day boundary
+        const checkInWorkDay  = getWorkDayDateString(checkInTime);
+        const checkOutWorkDay = getWorkDayDateString(effectiveCheckOut);
 
-        if (checkInDateStr !== checkOutDateStr) {
-            // Crosses midnight! Split the hours.
-            // 1. Calculate time until midnight for the check-in day
-            const midnight = new Date(`${checkInDateStr}T23:59:59.999+05:00`);
+        if (checkInWorkDay !== checkOutWorkDay) {
+            // Crosses 6 AM boundary — split at 6 AM of the checkout calendar day
+            // e.g. checkIn 9 PM Jul 20, checkOut 8 AM Jul 21 → split at 6 AM Jul 21
+            const checkOutCalDate = getPKTDateString(effectiveCheckOut);
+            const splitPoint = getSixAMSplit(checkOutCalDate); // 6 AM PKT of the checkout day
 
-            const durationMsDay1 = midnight - checkInTime;
-            const durationMinsDay1 = Math.floor(durationMsDay1 / (1000 * 60));
+            const durationMinsDay1 = Math.floor((splitPoint - checkInTime) / (1000 * 60));
+            const durationMinsDay2 = Math.floor((effectiveCheckOut - splitPoint) / (1000 * 60));
 
-            attendance.checkOut = midnight;
+            // Day 1 — checkIn work day
+            attendance.checkOut = splitPoint;
             attendance.duration = (attendance.duration || 0) + (durationMinsDay1 > 0 ? durationMinsDay1 : 0);
             attendance.status = 'Present';
-            // Record this partial session (up to midnight)
             if (!attendance.shifts) attendance.shifts = [];
             attendance.shifts.push({
                 checkIn: checkInTime,
-                checkOut: midnight,
+                checkOut: splitPoint,
                 duration: durationMinsDay1 > 0 ? durationMinsDay1 : 0
             });
             await attendance.save();
 
-            // 2. Calculate time from midnight to checkout for the next day
-            const nextDayStart = new Date(`${checkOutDateStr}T00:00:00.000+05:00`);
-
-            const durationMsDay2 = effectiveCheckOut - nextDayStart;
-            const durationMinsDay2 = Math.floor(durationMsDay2 / (1000 * 60));
-
-            let nextDayAttendance = await Attendance.findOne({ userId, date: checkOutDateStr });
+            // Day 2 — new work day starting at 6 AM
+            let nextDayAttendance = await Attendance.findOne({ userId, date: checkOutCalDate });
             if (!nextDayAttendance) {
                 nextDayAttendance = new Attendance({
                     userId,
-                    date: checkOutDateStr,
-                    checkIn: nextDayStart,
+                    date: checkOutCalDate,
+                    checkIn: splitPoint,
                     checkOut: effectiveCheckOut,
                     duration: durationMinsDay2 > 0 ? durationMinsDay2 : 0,
                     status: 'Present',
                     adminId: attendance.adminId,
-                    shifts: [{ checkIn: nextDayStart, checkOut: effectiveCheckOut, duration: durationMinsDay2 > 0 ? durationMinsDay2 : 0 }]
+                    shifts: [{ checkIn: splitPoint, checkOut: effectiveCheckOut, duration: durationMinsDay2 > 0 ? durationMinsDay2 : 0 }]
                 });
             } else {
-                nextDayAttendance.checkIn = nextDayStart;
+                nextDayAttendance.checkIn = splitPoint;
                 nextDayAttendance.checkOut = effectiveCheckOut;
                 nextDayAttendance.duration = (nextDayAttendance.duration || 0) + (durationMinsDay2 > 0 ? durationMinsDay2 : 0);
                 nextDayAttendance.status = 'Present';
                 if (!nextDayAttendance.shifts) nextDayAttendance.shifts = [];
-                nextDayAttendance.shifts.push({ checkIn: nextDayStart, checkOut: effectiveCheckOut, duration: durationMinsDay2 > 0 ? durationMinsDay2 : 0 });
+                nextDayAttendance.shifts.push({ checkIn: splitPoint, checkOut: effectiveCheckOut, duration: durationMinsDay2 > 0 ? durationMinsDay2 : 0 });
             }
             await nextDayAttendance.save();
 
-            attendance = nextDayAttendance; // Return the most recent one
+            attendance = nextDayAttendance;
         } else {
             // Same day checkout
             const durationMs = effectiveCheckOut - checkInTime;
@@ -862,44 +881,41 @@ const faceCheckIn = async (req, res) => {
                 });
             }
 
-            const checkInDateStr = getPKTDateString(checkInTime);
+            const checkInWorkDay  = getWorkDayDateString(checkInTime);
             let effectiveCheckOut = pktNow;
-            const checkOutDateStr = getPKTDateString(effectiveCheckOut);
+            const checkOutWorkDay = getWorkDayDateString(effectiveCheckOut);
 
-            if (checkInDateStr !== checkOutDateStr) {
-                // Crosses midnight! Split the hours.
-                const midnight = new Date(`${checkInDateStr}T23:59:59.999+05:00`);
+            if (checkInWorkDay !== checkOutWorkDay) {
+                // Crosses 6 AM boundary — split at 6 AM of the checkout calendar day
+                const checkOutCalDate = getPKTDateString(effectiveCheckOut);
+                const splitPoint = getSixAMSplit(checkOutCalDate);
 
-                const durationMsDay1 = midnight - checkInTime;
-                const durationMinsDay1 = Math.floor(durationMsDay1 / (1000 * 60));
+                const durationMinsDay1 = Math.floor((splitPoint - checkInTime) / (1000 * 60));
+                const durationMinsDay2 = Math.floor((effectiveCheckOut - splitPoint) / (1000 * 60));
 
-                openShift.checkOut = midnight;
+                openShift.checkOut = splitPoint;
                 openShift.duration = (openShift.duration || 0) + (durationMinsDay1 > 0 ? durationMinsDay1 : 0);
                 openShift.status = 'Present';
                 openShift.markedByFace = true;
                 if (!openShift.shifts) openShift.shifts = [];
-                // Update open placeholder if it exists, otherwise push
                 const lastFaceShift1 = openShift.shifts[openShift.shifts.length - 1];
                 if (lastFaceShift1 && !lastFaceShift1.checkOut) {
                     lastFaceShift1.checkIn = checkInTime;
-                    lastFaceShift1.checkOut = midnight;
+                    lastFaceShift1.checkOut = splitPoint;
                     lastFaceShift1.duration = durationMinsDay1 > 0 ? durationMinsDay1 : 0;
                     lastFaceShift1.missed = false;
                 } else {
-                    openShift.shifts.push({ checkIn: checkInTime, checkOut: midnight, duration: durationMinsDay1 > 0 ? durationMinsDay1 : 0 });
+                    openShift.shifts.push({ checkIn: checkInTime, checkOut: splitPoint, duration: durationMinsDay1 > 0 ? durationMinsDay1 : 0 });
                 }
                 await openShift.save();
 
-                const nextDayStart = new Date(`${checkOutDateStr}T00:00:00.000+05:00`);
+                const nextDayStart = splitPoint; // 6 AM PKT of checkout calendar day
 
-                const durationMsDay2 = effectiveCheckOut - nextDayStart;
-                const durationMinsDay2 = Math.floor(durationMsDay2 / (1000 * 60));
-
-                let nextDayAttendance = await Attendance.findOne({ userId, date: checkOutDateStr });
+                let nextDayAttendance = await Attendance.findOne({ userId, date: checkOutCalDate });
                 if (!nextDayAttendance) {
                     nextDayAttendance = new Attendance({
                         userId,
-                        date: checkOutDateStr,
+                        date: checkOutCalDate,
                         checkIn: nextDayStart,
                         checkOut: effectiveCheckOut,
                         duration: durationMinsDay2 > 0 ? durationMinsDay2 : 0,
