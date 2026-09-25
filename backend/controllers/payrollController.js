@@ -178,15 +178,17 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
 
 
             // ── OFF DAY (Friday / Vacation) ──────────────────────────────────
-            // All off-day pay uses salary/26 rate with brackets:
-            //   No show / missed checkout → Rs 0
-            //   ≤ 6h  → salary/26 × 0.5
-            //   > 6h ≤ 11h → salary/26 × 1
-            //   > 11h → salary/26 × 1.5
+            // Friday always pays daily salary (salary/30) even if absent.
+            // Extra pay on top based on hours worked (all using salary/26 rate):
+            //   Absent / no show     → salary/30 only
+            //   ≤ 4h                 → salary/30 + (salary/26)/2
+            //   > 4h  ≤ 8.5h        → salary/30 + salary/26
+            //   > 8.5h ≤ 12h        → salary/30 + salary/26 + (salary/26)/2
+            //   > 12h               → salary/30 + salary/26 + salary/26
             if (isOffDay && !isBeforeJoin) {
                 offDaysPassed++;
-                let dayEarnedSalary = 0;
-                let dayPayLabel = 'Off Day (Absent)';
+                let dayEarnedSalary = perDaySalary; // always paid base even if absent
+                let dayPayLabel = 'Off Day (Absent — Base Pay)';
                 let baseMinutes = 0;
 
                 if (record && record.checkIn && record.checkOut) {
@@ -194,32 +196,35 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                     baseMinutes = worked;
                     presentDays++;
 
-                    if (worked > 11 * 60) {
-                        dayEarnedSalary = overtimePay * 1.5;
-                        dayPayLabel = 'Off Day (Overtime — 1.5x)';
-                        totalOvertimeMinutes += (worked - 11 * 60);
+                    if (worked > 12 * 60) {
+                        dayEarnedSalary = perDaySalary + overtimePay + overtimePay;
+                        dayPayLabel = 'Off Day (>12h — Base + OT + OT)';
+                        totalOvertimeMinutes += (worked - 12 * 60);
+                        totalOvertimePay += overtimePay * 2;
+                    } else if (worked > 8.5 * 60) {
+                        dayEarnedSalary = perDaySalary + overtimePay + (overtimePay / 2);
+                        dayPayLabel = 'Off Day (8.5–12h — Base + OT + OT/2)';
+                        totalOvertimeMinutes += (worked - 8.5 * 60);
                         totalOvertimePay += overtimePay * 1.5;
-                    } else if (worked > 6 * 60) {
-                        dayEarnedSalary = overtimePay;
-                        dayPayLabel = 'Off Day (Full Day — /26)';
+                    } else if (worked > 4 * 60) {
+                        dayEarnedSalary = perDaySalary + overtimePay;
+                        dayPayLabel = 'Off Day (4–8.5h — Base + OT)';
+                        totalOvertimePay += overtimePay;
                     } else {
-                        dayEarnedSalary = overtimePay * 0.5;
-                        dayPayLabel = 'Off Day (Half Day — /26)';
+                        dayEarnedSalary = perDaySalary + (overtimePay / 2);
+                        dayPayLabel = 'Off Day (≤4h — Base + OT/2)';
+                        totalOvertimePay += overtimePay / 2;
                     }
-                    lastWorkingDayStatus = 'Present';
-                } else {
-                    // No show or missed checkout on off day → Rs 0
-                    dayEarnedSalary = 0;
-                    lastWorkingDayStatus = 'Absent';
                 }
+                lastWorkingDayStatus = 'Present'; // Friday never breaks sandwich rule
 
                 totalEarnedSalary += dayEarnedSalary;
                 dailyBreakdown.push({
                     date: dateString,
                     status: dayPayLabel + labelSuffix,
                     workMinutes: baseMinutes,
-                    baseDaySalary: 0,
-                    overtimePay: Math.round(dayEarnedSalary),
+                    baseDaySalary: Math.round(perDaySalary),
+                    overtimePay: Math.round(dayEarnedSalary - perDaySalary),
                     earnedSalary: Math.round(dayEarnedSalary)
                 });
                 loopDate.setDate(loopDate.getDate() + 1);
@@ -246,12 +251,11 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
             }
 
             // ── REGULAR WORKING DAY ──────────────────────────────────────────────
-            // Rule 1: No check-in record → Absent (salary = 0)
-            // Rule 2: Check-in exists but no check-out → Absent (salary = 0)
-            // Rule 3: Both present → evaluate by duration:
-            //   ≤ 6h  → Half Day  (50%)
-            //   > 6h ≤ 11h → Full Day (100%)
-            //   > 11h → Full Day + Overtime
+            // No show / missed checkout → Rs 0
+            // ≤ 4h        → salary/30 × 0.5  (half day)
+            // > 4h ≤ 8.5h → salary/30 × 1    (full day)
+            // > 8.5h ≤ 12h→ salary/30 + (salary/26)/2
+            // > 12h       → salary/30 + salary/26
             let dayEarnedSalary = 0;
             let dayPayLabel = '';
             let baseMinutes = 0;
@@ -272,16 +276,24 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                 baseMinutes = record.duration || 0;
                 presentDays++;
 
-                if (baseMinutes > 11 * 60) {
-                    // Overtime day: pay salary/26 for the whole day (replaces normal day rate)
-                    dayEarnedSalary = overtimePay;
-                    dayPayLabel = 'Present (Overtime Day)';
-                    totalOvertimeMinutes += (baseMinutes - 11 * 60);
+                if (baseMinutes > 12 * 60) {
+                    // > 12h → full day + full OT
+                    dayEarnedSalary = perDaySalary + overtimePay;
+                    dayPayLabel = 'Present (>12h — Full Day + OT)';
+                    totalOvertimeMinutes += (baseMinutes - 12 * 60);
                     totalOvertimePay += overtimePay;
-                } else if (baseMinutes > 6 * 60) {
+                } else if (baseMinutes > 8.5 * 60) {
+                    // > 8.5h ≤ 12h → full day + half OT
+                    dayEarnedSalary = perDaySalary + (overtimePay / 2);
+                    dayPayLabel = 'Present (8.5–12h — Full Day + OT/2)';
+                    totalOvertimeMinutes += (baseMinutes - 8.5 * 60);
+                    totalOvertimePay += overtimePay / 2;
+                } else if (baseMinutes > 4 * 60) {
+                    // > 4h ≤ 8.5h → full day
                     dayEarnedSalary = perDaySalary;
                     dayPayLabel = 'Present (Full Day)';
                 } else {
+                    // ≤ 4h → half day
                     dayEarnedSalary = perDaySalary * 0.5;
                     dayPayLabel = 'Present (Half Day)';
                 }
@@ -301,10 +313,10 @@ const generatePayrollService = async (adminId, month, cycle, customStart, custom
                 date: dateString,
                 status: dayPayLabel + labelSuffix,
                 workMinutes: baseMinutes,
-                baseDaySalary: baseMinutes > 11 * 60 ? 0 : Math.round(dayEarnedSalary),
-                overtimePay: baseMinutes > 11 * 60 ? Math.round(overtimePay) : 0,
+                baseDaySalary: isAbsent ? 0 : (baseMinutes > 8.5 * 60 ? Math.round(perDaySalary) : Math.round(dayEarnedSalary)),
+                overtimePay: isAbsent ? 0 : (baseMinutes > 8.5 * 60 ? Math.round(dayEarnedSalary - perDaySalary) : 0),
                 earnedSalary: Math.round(dayEarnedSalary),
-                ...(dayEarnedSalary === 0 && (!record || !record.checkOut) ? { deduction: Math.round(monthlySalary / 30) } : {})
+                ...(isAbsent ? { deduction: Math.round(perDaySalary) } : {})
             });
 
             loopDate.setDate(loopDate.getDate() + 1);
