@@ -464,8 +464,16 @@ router.post('/fingerprint-checkin', kioskAuth, async (req, res) => {
 
     // Server time only. Existing face attendance and Attendance schema stay unchanged.
     const now = new Date();
-    const pktDate = date => formatInTimeZone(date, 'Asia/Karachi', 'yyyy-MM-dd');
-    const today = pktDate(now);
+    const getWorkDay = (date) => {
+      const pktHour = parseInt(formatInTimeZone(date, 'Asia/Karachi', 'HH'), 10);
+      if (pktHour < 6) {
+        const prev = new Date(date);
+        prev.setTime(prev.getTime() - (6 * 60 * 60 * 1000));
+        return formatInTimeZone(prev, 'Asia/Karachi', 'yyyy-MM-dd');
+      }
+      return formatInTimeZone(date, 'Asia/Karachi', 'yyyy-MM-dd');
+    };
+    const today = getWorkDay(now);
     const scope = { userId: id, adminId: user.adminId };
     const minutesBetween = (start, end) => Math.max(0, Math.floor((end - start) / 60000));
     const finishSession = (record, start, end) => {
@@ -505,19 +513,20 @@ router.post('/fingerprint-checkin', kioskAuth, async (req, res) => {
         return res.json({
           action: 'too_soon', status: 'checked_in', employeeName: user.name,
           retryAfterSeconds: Math.max(1, Math.ceil((30 - elapsedMinutes) * 60)),
-          message: 'روانگی آمد کے کم از کم ۳۰ منٹ بعد درج ہو سکتی ہے۔'
+          message: 'روانگی آمد کے کم از کم 30 منٹ بعد درج ہو سکتی ہے۔'
         });
       }
-      if (pktDate(start) === today) {
+      const startWorkDay = getWorkDay(start);
+      if (startWorkDay === today) {
         finishSession(open, start, now);
         await open.save();
       } else {
-        const midnight = new Date(`${today}T00:00:00.000+05:00`);
+        const boundary = new Date(`${today}T06:00:00.000+05:00`);
         let nextDay = await Attendance.findOne({ ...scope, date: today });
         if (!nextDay) nextDay = new Attendance({ ...scope, date: today, status: 'Present', shifts: [] });
-        finishSession(open, start, midnight);
-        nextDay.checkIn = midnight;
-        finishSession(nextDay, midnight, now);
+        finishSession(open, start, boundary);
+        nextDay.checkIn = boundary;
+        finishSession(nextDay, boundary, now);
         await open.validate();
         await nextDay.validate();
         // Preserves the supplied two-write flow; these saves are not a transaction.
@@ -532,11 +541,11 @@ router.post('/fingerprint-checkin', kioskAuth, async (req, res) => {
     }
 
     let attendance = await Attendance.findOne({ ...scope, date: today });
-    if (attendance?.checkOut && now - new Date(attendance.checkOut) < 30000) {
+    if (attendance?.checkOut && now - new Date(attendance.checkOut) < 600000) {
       return res.json({
         action: 'too_soon', status: 'checked_out', employeeName: user.name,
-        retryAfterSeconds: Math.max(1, Math.ceil((30000 - (now - new Date(attendance.checkOut))) / 1000)),
-        message: 'نئی شفٹ شروع کرنے سے پہلے ۳۰ سیکنڈ انتظار کریں۔'
+        retryAfterSeconds: Math.max(1, Math.ceil((600000 - (now - new Date(attendance.checkOut))) / 1000)),
+        message: 'Already checked out. Please wait 10 minutes before starting your next shift.'
       });
     }
     if (!attendance) attendance = new Attendance({ ...scope, date: today, duration: 0, shifts: [] });
