@@ -409,8 +409,8 @@ cron.schedule('*/5 * * * *', () => {
     timezone: "Asia/Karachi"
 });
 
-// Schedule to run every day at 6:00 AM PKT
-cron.schedule('0 6 * * *', () => {
+// Schedule to run every day at 7:00 AM PKT
+cron.schedule('0 7 * * *', () => {
     sendDailyReport();
 }, {
     scheduled: true,
