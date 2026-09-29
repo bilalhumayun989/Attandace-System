@@ -423,6 +423,25 @@ router.post('/fingerprint-enroll', enrollAuth, async (req, res) => {
   }
 });
 
+router.post('/fingerprint-remove', enrollAuth, async (req, res) => {
+  try {
+    const { userId } = req.body || {};
+    if (!validId(userId)) {
+      return res.status(400).json({ message: 'Employee ki maloomat drust nahi hain.' });
+    }
+    const employee = await Employee.findOneAndUpdate(
+      { _id: userId, adminId: tenantId, status: { $ne: 'Deleted' } },
+      { $set: { fingerprintTemplate: null } },
+      { new: true }
+    );
+    if (!employee) return denied(res);
+    res.json({ message: 'Fingerprint hata diya gaya hai.' });
+  } catch (error) {
+    console.error('[Fingerprint removal]', error);
+    res.status(500).json({ message: 'فنگر پرنٹ درج نہیں ہو سکا۔ انتظامیہ سے رابطہ کریں۔' });
+  }
+});
+
 // Prevent overlapping fingerprint requests within this Node process.
 // This is NOT a distributed lock and does not coordinate with the face controller.
 const inFlight = new Set();
