@@ -1,4 +1,5 @@
 const Attendance = require('../models/Attendance');
+const { isValidCalendarDate, getMonthEnd } = require('../utils/calendar');
 const User = require('../models/User');
 const { formatInTimeZone } = require('date-fns-tz');
 const { sendDailyReport } = require('../utils/reportCron');
@@ -506,6 +507,10 @@ const addCustomAttendance = async (req, res) => {
     try {
         const { userId, date, checkIn, checkOut, status } = req.body;
 
+        if (!isValidCalendarDate(date)) {
+            return res.status(400).json({ message: 'Please provide a valid calendar date (YYYY-MM-DD)' });
+        }
+
         const user = await User.findOne({ _id: userId, adminId: req.adminId });
         if (!user) return res.status(404).json({ message: 'User not found' });
 
@@ -696,7 +701,9 @@ const getMyAttendanceHistory = async (req, res) => {
 
         const query = { userId };
         if (month) {
-            query.date = { $regex: `^${month}` };
+            const endOfMonth = getMonthEnd(month);
+            if (!endOfMonth) return res.status(400).json({ message: 'Invalid month (YYYY-MM)' });
+            query.date = { $gte: `${month}-01`, $lte: endOfMonth };
         }
 
         const attendance = await Attendance.find(query).sort({ date: -1 });

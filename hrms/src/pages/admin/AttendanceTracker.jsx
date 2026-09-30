@@ -61,6 +61,16 @@ const AttendanceTracker = () => {
     const [filterYear, setFilterYear] = useState(String(now.getFullYear()));
     const [isYearOpen, setIsYearOpen] = useState(false);
 
+    const daysInSelectedMonth = filterMonth === 'All'
+        ? 31
+        : new Date(Number(filterYear), Number(filterMonth), 0).getDate();
+
+    useEffect(() => {
+        setFilterDay(day => day !== 'All' && Number(day) > daysInSelectedMonth
+            ? String(daysInSelectedMonth).padStart(2, '0')
+            : day);
+    }, [daysInSelectedMonth]);
+
     useEffect(() => {
         fetchAttendance();
         fetchAllEmployees();
@@ -292,7 +302,7 @@ const AttendanceTracker = () => {
 
     const days = [
         { val: 'All', label: 'All' },
-        ...Array.from({ length: 31 }, (_, i) => ({ val: String(i + 1).padStart(2, '0'), label: String(i + 1) }))
+        ...Array.from({ length: daysInSelectedMonth }, (_, i) => ({ val: String(i + 1).padStart(2, '0'), label: String(i + 1) }))
     ];
 
     const currentYear = new Date().getFullYear();

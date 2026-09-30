@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
+const { getMonthEnd } = require('../utils/calendar');
 
 // @desc    Get employees with optional attendance filters
 // @route   POST /api/admin-leave/filter
@@ -26,7 +27,8 @@ const getFilteredEmployees = async (req, res) => {
         if (month && (offOnSundayOnly || workedWeekend)) {
             // Need to filter based on attendance
             const startOfMonth = `${month}-01`;
-            const endOfMonth = `${month}-31`; 
+            const endOfMonth = getMonthEnd(month);
+            if (!endOfMonth) return res.status(400).json({ message: 'Invalid month (YYYY-MM)' });
             
             const attendanceRecords = await Attendance.find({
                 adminId: req.adminId,
