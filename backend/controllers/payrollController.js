@@ -11,7 +11,7 @@ const { formatInTimeZone } = require('date-fns-tz');
 const generatePayrollService = async (adminId, month, cycle, customStart, customEnd) => {
     if (!month && !customStart) throw new Error('Month or Custom Date Range is required');
 
-    const query = { role: { $nin: ['Admin', 'SuperAdmin'] }, adminId: adminId };
+    const query = { role: { $nin: ['Admin', 'SuperAdmin'] }, adminId: adminId, status: { $ne: 'Deleted' } };
 
     const employees = await User.find(query);
     const payrolls = [];
@@ -400,10 +400,10 @@ const getPayrolls = async (req, res) => {
     try {
         const query = month ? { month: { $regex: `^${month}` }, adminId: req.adminId } : { adminId: req.adminId };
         const payrolls = await Payroll.find(query)
-            .populate('userId', 'name employeeId role department')
+            .populate({ path: 'userId', select: 'name employeeId role department', match: { status: { $ne: 'Deleted' }, adminId: req.adminId } })
             .sort({ createdAt: -1 }); // Sort by newest calculation first
 
-        res.json(payrolls);
+        res.json(payrolls.filter(record => record.userId));
     } catch (error) {
         res.status(500).json({ message: 'Server error', error: error.message });
     }

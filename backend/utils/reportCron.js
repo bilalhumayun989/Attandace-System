@@ -160,13 +160,14 @@ const sendDailyReport = async (tenantId = null) => {
         }
 
         const rawAttendance = await Attendance.find(attendanceQuery)
-            .populate('userId', 'name employeeId department adminId');
+            .populate({ path: 'userId', select: 'name employeeId department adminId', match: { status: { $ne: 'Deleted' } } });
 
         console.log(`[Report] Raw attendance fetched: ${rawAttendance.length} records for dates [${datesToQuery.join(', ')}]`);
 
         // Filter records whose checkIn falls inside the window
         // Absent records (no checkIn) — include if their date falls within the window's date range
         const allAttendance = rawAttendance.filter(r => {
+            if (!r.userId) return false;
             if (r.checkIn) {
                 return r.checkIn >= windowStart && r.checkIn < windowEnd;
             }
@@ -361,9 +362,9 @@ const autoGenerateAndSendPayroll = async (cycle, monthOffset = 0) => {
             ];
 
             payrolls.forEach(p => {
-                const deleted = p.userId?.status === 'Deleted' ? ' (Deleted)' : '';
+                if (!p.userId || p.userId.status === 'Deleted') return;
                 worksheet.addRow({
-                    name:       (p.userId?.name || 'Unknown') + deleted,
+                    name:       p.userId.name,
                     dept:       p.userId?.department || '-',
                     base:       `Rs ${p.salary}`,
                     days:       p.payableDays,

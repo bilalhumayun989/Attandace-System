@@ -9,7 +9,7 @@ const getFilteredEmployees = async (req, res) => {
     try {
         const { offOnSundayOnly, workedWeekend, month, search, department, role } = req.body;
         
-        let query = { role: { $nin: ['Admin', 'SuperAdmin'] }, adminId: req.adminId };
+        let query = { role: { $nin: ['Admin', 'SuperAdmin'] }, adminId: req.adminId, status: { $ne: 'Deleted' } };
         
         // Basic Filters
         if (search) {

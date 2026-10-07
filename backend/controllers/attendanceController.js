@@ -103,7 +103,7 @@ const format12h = (time24) => {
 // @desc    Reconcile missing attendance records (Automated Absent tracking)
 const reconcileAttendance = async (userId) => {
     const user = await User.findById(userId);
-    if (!user) return;
+    if (!user || user.status === 'Deleted') return;
 
     const pktNow = getPKTTime();
     const todayStr = getPKTDateString(pktNow);
@@ -162,6 +162,7 @@ const reconcileAttendance = async (userId) => {
 
 // @desc    Reconcile missing attendance records for multiple users in bulk
 const reconcileMultipleUsersAttendance = async (users) => {
+    users = (users || []).filter(user => user.status !== 'Deleted');
     if (!users || users.length === 0) return;
 
     const pktNow = getPKTTime();
@@ -511,7 +512,7 @@ const addCustomAttendance = async (req, res) => {
             return res.status(400).json({ message: 'Please provide a valid calendar date (YYYY-MM-DD)' });
         }
 
-        const user = await User.findOne({ _id: userId, adminId: req.adminId });
+        const user = await User.findOne({ _id: userId, adminId: req.adminId, status: { $ne: 'Deleted' } });
         if (!user) return res.status(404).json({ message: 'User not found' });
 
         // Parse time if provided
@@ -634,13 +635,13 @@ const addCustomAttendance = async (req, res) => {
 const getAllAttendance = async (req, res) => {
     try {
         // Trigger reconciliation for all staff in bulk before fetching
-        const users = await User.find({ role: { $nin: ['Admin', 'SuperAdmin'] }, adminId: req.adminId });
+        const users = await User.find({ role: { $nin: ['Admin', 'SuperAdmin'] }, adminId: req.adminId, status: { $ne: 'Deleted' } });
         await reconcileMultipleUsersAttendance(users);
 
         const attendance = await Attendance.find({ adminId: req.adminId })
-            .populate('userId', 'name employeeId role department offDays')
+            .populate({ path: 'userId', select: 'name employeeId role department offDays', match: { status: { $ne: 'Deleted' }, adminId: req.adminId } })
             .sort({ date: -1, createdAt: -1 });
-        res.json(attendance);
+        res.json(attendance.filter(record => record.userId));
     } catch (error) {
         res.status(500).json({ message: 'Server error', error: error.message });
     }
@@ -673,11 +674,13 @@ const updateAttendance = async (req, res) => {
 const getUserAttendanceHistory = async (req, res) => {
     try {
         const { userId } = req.params;
+        const user = await User.findOne({ _id: userId, adminId: req.adminId, status: { $ne: 'Deleted' } });
+        if (!user) return res.status(404).json({ message: 'User not found' });
 
         // Trigger reconciliation for this user before fetching
         await reconcileAttendance(userId);
 
-        const attendance = await Attendance.find({ userId })
+        const attendance = await Attendance.find({ userId, adminId: req.adminId })
             .populate('userId', 'name employeeId role department offDays')
             .sort({ date: -1, createdAt: -1 });
 
@@ -836,7 +839,7 @@ const enrollFace = async (req, res) => {
 // @access  Public
 const getFaceDescriptors = async (req, res) => {
     try {
-        const employees = await User.find({ faceEnrolled: true }).select('_id name faceDescriptors');
+        const employees = await User.find({ faceEnrolled: true, status: { $ne: 'Deleted' } }).select('_id name faceDescriptors');
         res.json({ employees });
     } catch (error) {
         console.error('Error in getFaceDescriptors:', error);

@@ -27,7 +27,7 @@ const getCurrentMonth = () => {
  *  - remainingBalance: effectiveSalary - totalPaid  (floor 0)
  */
 const computeSummary = async (userId, month) => {
-    const user = await User.findById(userId).select('salary name employeeId department');
+    const user = await User.findOne({ _id: userId, status: { $ne: 'Deleted' } }).select('salary name employeeId department');
     if (!user) return null;
 
     const expenses = await Expense.find({ userId, month })
@@ -111,7 +111,7 @@ const getEmployeeSummary = async (req, res) => {
         if (!summary) return res.status(404).json({ message: 'Employee not found.' });
 
         // Verify admin tenancy
-        const user = await User.findById(userId);
+        const user = await User.findOne({ _id: userId, status: { $ne: 'Deleted' } });
         if (user.adminId?.toString() !== req.adminId?.toString()) {
             return res.status(403).json({ message: 'Access denied.' });
         }
@@ -148,9 +148,9 @@ const getExpenses = async (req, res) => {
     try {
         const month = req.query.month || getCurrentMonth();
         const expenses = await Expense.find({ adminId: req.adminId, month })
-            .populate('userId', 'name employeeId department salary')
+            .populate({ path: 'userId', select: 'name employeeId department salary', match: { status: { $ne: 'Deleted' }, adminId: req.adminId } })
             .sort({ createdAt: -1 });
-        res.json(expenses);
+        res.json(expenses.filter(record => record.userId));
     } catch (err) {
         console.error('[Expense] getExpenses error:', err);
         res.status(500).json({ message: 'Server error', error: err.message });
@@ -171,7 +171,7 @@ const payFullSalary = async (req, res) => {
             return res.status(400).json({ message: 'salaryType must be "full_month" or "current_earned".' });
         }
 
-        const user = await User.findById(userId);
+        const user = await User.findOne({ _id: userId, status: { $ne: 'Deleted' } });
         if (!user) return res.status(404).json({ message: 'Employee not found.' });
         if (user.adminId?.toString() !== req.adminId?.toString()) {
             return res.status(403).json({ message: 'Access denied.' });
@@ -234,7 +234,7 @@ const payAdvanceSalary = async (req, res) => {
             return res.status(400).json({ message: 'Invalid advancePeriod. Use: 1-15, 16-end, or full-month.' });
         }
 
-        const user = await User.findById(userId);
+        const user = await User.findOne({ _id: userId, status: { $ne: 'Deleted' } });
         if (!user) return res.status(404).json({ message: 'Employee not found.' });
         if (user.adminId?.toString() !== req.adminId?.toString()) {
             return res.status(403).json({ message: 'Access denied.' });
@@ -292,7 +292,7 @@ const addDeduction = async (req, res) => {
             return res.status(400).json({ message: 'Amount must be greater than 0.' });
         }
 
-        const user = await User.findById(userId);
+        const user = await User.findOne({ _id: userId, status: { $ne: 'Deleted' } });
         if (!user) return res.status(404).json({ message: 'Employee not found.' });
         if (user.adminId?.toString() !== req.adminId?.toString()) {
             return res.status(403).json({ message: 'Access denied.' });
@@ -346,7 +346,7 @@ const addBonus = async (req, res) => {
             return res.status(400).json({ message: 'Amount must be greater than 0.' });
         }
 
-        const user = await User.findById(userId);
+        const user = await User.findOne({ _id: userId, status: { $ne: 'Deleted' } });
         if (!user) return res.status(404).json({ message: 'Employee not found.' });
         if (user.adminId?.toString() !== req.adminId?.toString()) {
             return res.status(403).json({ message: 'Access denied.' });
@@ -392,7 +392,7 @@ const addCustomPayment = async (req, res) => {
             return res.status(400).json({ message: 'Amount must be greater than 0.' });
         }
 
-        const user = await User.findById(userId);
+        const user = await User.findOne({ _id: userId, status: { $ne: 'Deleted' } });
         if (!user) return res.status(404).json({ message: 'Employee not found.' });
         if (user.adminId?.toString() !== req.adminId?.toString()) {
             return res.status(403).json({ message: 'Access denied.' });

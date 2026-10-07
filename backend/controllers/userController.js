@@ -98,7 +98,10 @@ const createEmployee = async (req, res) => {
 const getEmployees = async (req, res) => {
     try {
         // Show all users who are NOT Admins or SuperAdmins AND belong to the current admin's tenant
-        const users = await User.find({ role: { $nin: ['Admin', 'SuperAdmin'] }, adminId: req.adminId }).sort({ createdAt: -1 });
+        const query = { role: { $nin: ['Admin', 'SuperAdmin'] }, adminId: req.adminId };
+        // Employee management includes deleted staff so they can be restored.
+        if (req.query.includeDeleted !== 'true') query.status = { $ne: 'Deleted' };
+        const users = await User.find(query).sort({ createdAt: -1 });
         res.json(users);
     } catch (error) {
         console.error('Error in getEmployees:', error);

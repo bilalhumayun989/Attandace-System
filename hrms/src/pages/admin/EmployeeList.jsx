@@ -50,7 +50,7 @@ const EmployeeList = () => {
     const fetchEmployees = async () => {
         try {
             const roleHeader = adminUser?.role || 'Admin';
-            const response = await fetch(`${API_BASE_URL}/users`, {
+            const response = await fetch(`${API_BASE_URL}/users?includeDeleted=true`, {
                 headers: { 'X-Role-Context': roleHeader },
                 credentials: 'include'
             });

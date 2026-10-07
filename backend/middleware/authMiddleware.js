@@ -32,6 +32,9 @@ const protect = async (req, res, next) => {
         try {
             const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret123');
             req.user = await User.findById(decoded.id).select('-password');
+            if (!req.user || req.user.status === 'Deleted') {
+                return res.status(401).json({ message: 'Not authorized, user unavailable' });
+            }
 
             // Attach permissions to req.user
             if (req.user) {
