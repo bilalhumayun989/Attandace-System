@@ -38,15 +38,16 @@ export const AttendanceTable = ({
     <>
       {filteredAttendance.map((record, index) => {
         // First completed shift — shown in the summary row (the shift that counts)
-        const firstCompletedShift = record.shifts?.find(s => s.checkOut) || null;
+        const firstCompletedShift = record.shifts?.find(s => s.checkOut && !s.missed) || null;
         const lastShift = record.shifts && record.shifts.length > 0
           ? record.shifts[record.shifts.length - 1]
           : null;
         const displayCheckIn = firstCompletedShift ? firstCompletedShift.checkIn : record.checkIn;
-        const displayCheckOut = firstCompletedShift ? firstCompletedShift.checkOut : record.checkOut;
+        const legacyMissedCheckout = record.status === 'Absent' && !record.duration && record.checkIn === record.checkOut;
+        const displayCheckOut = legacyMissedCheckout ? null : (firstCompletedShift ? firstCompletedShift.checkOut : record.checkOut);
         const hasMultipleShifts = record.shifts && record.shifts.length > 1;
         // isActive only when the LAST shift has no checkout (open or missed) AND no prior shift was completed
-        const isActive = record.checkIn && !record.checkOut && !(lastShift && lastShift.checkOut);
+        const isActive = record.status !== 'Absent' && record.checkIn && !record.checkOut && !lastShift?.missed && !lastShift?.checkOut;
 
         return (
           <tr key={record._id || index} className={`hover:bg-muted/30 transition-colors ${record.userId?.status === 'Deleted' ? 'line-through opacity-50 bg-muted/20' : ''}`}>

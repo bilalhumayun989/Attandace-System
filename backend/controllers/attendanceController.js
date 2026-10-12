@@ -1,8 +1,8 @@
 const Attendance = require('../models/Attendance');
-const { isValidCalendarDate, getMonthEnd } = require('../utils/calendar');
+const { isValidCalendarDate, getMonthEnd, addCalendarDays, getCalendarWeekday } = require('../utils/calendar');
 const User = require('../models/User');
 const { formatInTimeZone } = require('date-fns-tz');
-const { sendDailyReport } = require('../utils/reportCron');
+const { sendDailyReport, runAutoCheckOut } = require('../utils/reportCron');
 
 // @desc    Manually trigger daily report email (Admin)
 // @route   POST /api/attendance/report/send
@@ -104,6 +104,8 @@ const format12h = (time24) => {
 const reconcileAttendance = async (userId) => {
     const user = await User.findById(userId);
     if (!user || user.status === 'Deleted') return;
+    // Serverless requests cannot rely on an always-running background timer.
+    await runAutoCheckOut({ userId, adminId: user.adminId });
 
     const pktNow = getPKTTime();
     const todayStr = getPKTDateString(pktNow);
@@ -137,7 +139,7 @@ const reconcileAttendance = async (userId) => {
         const userOffDays = (user.offDays && user.offDays.length > 0) ? user.offDays : [5]; // Default Friday
         while (current <= yesterday) {
             const dateStr = getPKTDateString(current);
-            const dayOfWeek = current.getDay();
+            const dayOfWeek = getCalendarWeekday(dateStr);
 
             if (!recordMap.has(dateStr)) {
                 if (!userOffDays.includes(dayOfWeek) && !(user.vacations && user.vacations.includes(dateStr))) {
@@ -149,7 +151,7 @@ const reconcileAttendance = async (userId) => {
                     });
                 }
             }
-            current.setDate(current.getDate() + 1);
+            current = new Date(addCalendarDays(dateStr, 1) + 'T00:00:00.000+05:00');
         }
 
         if (newRecords.length > 0) {
@@ -164,6 +166,7 @@ const reconcileAttendance = async (userId) => {
 const reconcileMultipleUsersAttendance = async (users) => {
     users = (users || []).filter(user => user.status !== 'Deleted');
     if (!users || users.length === 0) return;
+    await runAutoCheckOut({ userId: { $in: users.map(u => u._id) } });
 
     const pktNow = getPKTTime();
     const todayStr = getPKTDateString(pktNow);
@@ -205,7 +208,7 @@ const reconcileMultipleUsersAttendance = async (users) => {
 
             while (current <= yesterday) {
                 const dateStr = getPKTDateString(current);
-                const dayOfWeek = current.getDay();
+                const dayOfWeek = getCalendarWeekday(dateStr);
 
                 if (!userSet.has(dateStr)) {
                     if (!userOffDays.includes(dayOfWeek) && !(user.vacations && user.vacations.includes(dateStr))) {
@@ -217,7 +220,7 @@ const reconcileMultipleUsersAttendance = async (users) => {
                         });
                     }
                 }
-                current.setDate(current.getDate() + 1);
+                current = new Date(addCalendarDays(dateStr, 1) + 'T00:00:00.000+05:00');
             }
         }
 
@@ -240,13 +243,17 @@ const checkIn = async (req, res) => {
         if (user.status === 'Deleted') return res.status(400).json({ message: 'Deleted users cannot mark attendance' });
 
         const pktNow = getPKTTime();
-        const dateStr = getPKTDateString(pktNow);
+        const dateStr = getWorkDayDateString(pktNow);
+
+        await runAutoCheckOut({ userId });
 
         // Find the most recent open shift
         const openShift = await Attendance.findOne({
             userId,
             checkIn: { $ne: null },
-            checkOut: null
+            checkOut: null,
+            // A finalized missed session is no longer an active shift.
+            $expr: { $ne: [{ $arrayElemAt: ['$shifts.missed', -1] }, true] }
         }).sort({ checkIn: -1 });
 
         if (openShift) {
@@ -263,7 +270,7 @@ const checkIn = async (req, res) => {
                         lastEntry.missed = true;
                     }
                 }
-                openShift.checkOut = openShift.checkIn; // close it so it's no longer open
+                openShift.checkOut = null; // Missing checkout stays missing.
                 await openShift.save();
             } else {
                 return res.status(400).json({ message: 'You have an ongoing shift. Please check out first.' });
@@ -312,11 +319,15 @@ const checkOut = async (req, res) => {
         const userId = req.user._id;
         const pktNow = getPKTTime();
 
+        await runAutoCheckOut({ userId });
+
         // Find the most recent open shift
         let attendance = await Attendance.findOne({
             userId,
             checkIn: { $ne: null },
-            checkOut: null
+            checkOut: null,
+            // A finalized missed session is no longer an active shift.
+            $expr: { $ne: [{ $arrayElemAt: ['$shifts.missed', -1] }, true] }
         }).sort({ checkIn: -1 });
 
         if (!attendance) {
@@ -442,13 +453,17 @@ const getAttendanceStatus = async (req, res) => {
     try {
         const userId = req.user._id;
         const pktNow = getPKTTime();
-        const dateStr = getPKTDateString(pktNow);
+        const dateStr = getWorkDayDateString(pktNow);
+
+        await runAutoCheckOut({ userId });
 
         // Find any open shift
         let attendance = await Attendance.findOne({
             userId,
             checkIn: { $ne: null },
-            checkOut: null
+            checkOut: null,
+            // A finalized missed session is no longer an active shift.
+            $expr: { $ne: [{ $arrayElemAt: ['$shifts.missed', -1] }, true] }
         }).sort({ checkIn: -1 });
 
         // If no open shift, return today's calendar record (if any)
@@ -858,15 +873,19 @@ const faceCheckIn = async (req, res) => {
         if (user.status === 'Deleted') return res.status(400).json({ message: 'Deleted users cannot mark attendance' });
 
         const pktNow = getPKTTime(); // Use server time for security
-        const dateStr = getPKTDateString(pktNow);
+        const dateStr = getWorkDayDateString(pktNow);
 
         const twentyHoursAgo = new Date(pktNow.getTime() - (20 * 60 * 60 * 1000));
+
+        await runAutoCheckOut({ userId });
 
         // Find an open shift
         let openShift = await Attendance.findOne({
             userId,
             checkIn: { $ne: null },
-            checkOut: null
+            checkOut: null,
+            // A finalized missed session is no longer an active shift.
+            $expr: { $ne: [{ $arrayElemAt: ['$shifts.missed', -1] }, true] }
         }).sort({ checkIn: -1 });
 
         // Check if open shift is older than 20 hours (missed checkout)
@@ -981,7 +1000,8 @@ const faceCheckIn = async (req, res) => {
                 checkIn: pktNow,
                 status: 'Present',
                 adminId: user.adminId,
-                markedByFace: true
+                markedByFace: true,
+                shifts: [{ checkIn: pktNow, checkOut: null, duration: 0 }]
             });
             await attendance.save();
         } else {
@@ -990,6 +1010,7 @@ const faceCheckIn = async (req, res) => {
             todayRecord.checkOut = null; // Open new shift
             todayRecord.markedByFace = true;
             todayRecord.status = 'Present'; // Override any prior Absent status
+            todayRecord.shifts.push({ checkIn: pktNow, checkOut: null, duration: 0 });
             await todayRecord.save();
         }
 

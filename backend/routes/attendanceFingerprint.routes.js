@@ -337,6 +337,7 @@ const path = require('node:path');
 const { formatInTimeZone } = require('date-fns-tz');
 const Employee = require('../models/User');
 const Attendance = require('../models/Attendance');
+const { runAutoCheckOut } = require('../utils/reportCron');
 const router = express.Router();
 
 // Optional private config created by setup-fingerprint.cjs in this same directory.
@@ -494,14 +495,17 @@ router.post('/fingerprint-checkin', kioskAuth, async (req, res) => {
       // markedByFace is deliberately preserved.
     };
 
-    let open = await Attendance.findOne({ ...scope, checkIn: { $ne: null }, checkOut: null }).sort({ checkIn: -1 });
+    await runAutoCheckOut(scope);
+    let open = await Attendance.findOne({ ...scope, checkIn: { $ne: null }, checkOut: null,
+      $expr: { $ne: [{ $arrayElemAt: ['$shifts.missed', -1] }, true] }
+    }).sort({ checkIn: -1 });
     if (open && now - new Date(open.checkIn) > 20 * 60 * 60 * 1000) {
       if (!open.shifts) open.shifts = [];
       const last = open.shifts[open.shifts.length - 1];
       if (last && !last.checkOut) last.missed = true;
       else open.shifts.push({ checkIn: open.checkIn, duration: 0, missed: true });
       open.status = open.shifts.some(s => s.checkOut && !s.missed) ? 'Present' : 'Absent';
-      open.checkOut = open.checkIn;
+      open.checkOut = null; // A missed checkout must not fabricate a punch.
       await open.save();
       open = null;
     }

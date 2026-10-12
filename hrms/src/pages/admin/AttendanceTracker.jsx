@@ -10,6 +10,9 @@ import { Modal } from '../../components/ui/Modal';
 import { usePermissions } from '../../context/PermissionsContext';
 
 const AttendanceTracker = () => {
+    const now = new Date();
+    const pktParts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Karachi', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now).map(part => [part.type, part.value]));
+
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState('All');
     const [attendanceData, setAttendanceData] = useState([]);
@@ -30,7 +33,7 @@ const AttendanceTracker = () => {
     const [newStatus, setNewStatus] = useState('Present');
     const [customForm, setCustomForm] = useState({
         userId: '',
-        date: new Date().toISOString().split('T')[0],
+        date: [pktParts.year, pktParts.month, pktParts.day].join('-'),
         checkIn: '',
         checkOut: '',
         status: 'Present'
@@ -53,12 +56,11 @@ const AttendanceTracker = () => {
     }, [attendanceData]);
 
     // Date Filtering
-    const now = new Date();
-    const [filterDay, setFilterDay] = useState(String(now.getDate()).padStart(2, '0'));
+    const [filterDay, setFilterDay] = useState(pktParts.day);
     const [isDayOpen, setIsDayOpen] = useState(false);
-    const [filterMonth, setFilterMonth] = useState(String(now.getMonth() + 1).padStart(2, '0'));
+    const [filterMonth, setFilterMonth] = useState(pktParts.month);
     const [isMonthOpen, setIsMonthOpen] = useState(false);
-    const [filterYear, setFilterYear] = useState(String(now.getFullYear()));
+    const [filterYear, setFilterYear] = useState(pktParts.year);
     const [isYearOpen, setIsYearOpen] = useState(false);
 
     const daysInSelectedMonth = filterMonth === 'All'
@@ -576,13 +578,14 @@ const AttendanceTracker = () => {
             >
                 {selectedRecord && (() => {
                     const hasShifts = selectedRecord.shifts && selectedRecord.shifts.length > 0;
-                    const firstCompletedShift = selectedRecord.shifts?.find(s => s.checkOut) || null;
+                    const firstCompletedShift = selectedRecord.shifts?.find(s => s.checkOut && !s.missed) || null;
                     const lastShift = hasShifts ? selectedRecord.shifts[selectedRecord.shifts.length - 1] : null;
                     // Summary row shows the first completed shift (the one that counts)
                     const displayCheckIn = firstCompletedShift ? firstCompletedShift.checkIn : selectedRecord.checkIn;
-                    const displayCheckOut = firstCompletedShift ? firstCompletedShift.checkOut : selectedRecord.checkOut;
+                    const legacyMissedCheckout = selectedRecord.status === 'Absent' && !selectedRecord.duration && selectedRecord.checkIn === selectedRecord.checkOut;
+                    const displayCheckOut = legacyMissedCheckout ? null : (firstCompletedShift ? firstCompletedShift.checkOut : selectedRecord.checkOut);
                     // isActive: only true when last shift is still open AND no prior shift completed
-                    const isActive = selectedRecord.checkIn && !selectedRecord.checkOut && !(lastShift && lastShift.checkOut);
+                    const isActive = selectedRecord.status !== 'Absent' && selectedRecord.checkIn && !selectedRecord.checkOut && !lastShift?.missed && !lastShift?.checkOut;
                     // Count only completed shift durations for the total
                     const completedDuration = hasShifts
                         ? selectedRecord.shifts.filter(s => s.checkOut && !s.missed).reduce((sum, s) => sum + (s.duration || 0), 0)
@@ -647,7 +650,7 @@ const AttendanceTracker = () => {
                                         <tbody className="divide-y divide-border/40">
                                             {selectedRecord.shifts.map((shift, idx) => {
                                                 const isMissed = shift.missed || (!shift.checkOut && !(selectedRecord.checkIn && !selectedRecord.checkOut && idx === selectedRecord.shifts.length - 1 && !firstCompletedShift));
-                                                const isThisActive = !shift.checkOut && !shift.missed && selectedRecord.checkIn && !selectedRecord.checkOut && idx === selectedRecord.shifts.length - 1;
+                                                const isThisActive = selectedRecord.status !== 'Absent' && !shift.checkOut && !shift.missed && selectedRecord.checkIn && !selectedRecord.checkOut && idx === selectedRecord.shifts.length - 1;
                                                 return (
                                                     <tr key={idx} className={`hover:bg-muted/20 ${shift.missed ? 'bg-rose-50/40' : ''}`}>
                                                         <td className="px-3 py-2.5 text-muted-foreground font-medium">#{idx + 1}</td>

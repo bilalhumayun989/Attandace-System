@@ -14,24 +14,32 @@ const getPKTDateString = (date = new Date()) => {
     return formatInTimeZone(date, 'Asia/Karachi', 'yyyy-MM-dd');
 };
 
-const runAutoCheckOut = async () => {
+const runAutoCheckOut = async (scope = {}) => {
     try {
         const pktNow = getPKTTime();
         const twentyHoursAgo = new Date(pktNow.getTime() - (20 * 60 * 60 * 1000));
 
-        // Only find shifts that are still open (not yet marked Absent/missed) and older than 20 hours
+        // Overnight attendance belongs to its original workday until 6 AM PKT.
+        const workDay = getPKTDateString(new Date(pktNow.getTime() - 6 * 60 * 60 * 1000));
+        // Finalize a missing checkout when its workday ends, or at the 20-hour limit.
         const openShifts = await Attendance.find({
-            checkIn: { $ne: null, $lt: twentyHoursAgo },
+            ...scope,
+            checkIn: { $ne: null },
+            $or: [
+                { date: { $lt: workDay } },
+                { checkIn: { $lt: twentyHoursAgo } }
+            ],
             checkOut: null,
-            status: { $nin: ['Absent', 'On Leave'] }, // skip already processed records
-            'shifts.missed': { $ne: true } // skip records we already marked as missed
+            status: { $ne: 'On Leave' },
+            // Earlier missed sessions must not prevent finalizing a later open session.
+            $expr: { $ne: [{ $arrayElemAt: ['$shifts.missed', -1] }, true] }
         });
 
         if (openShifts.length > 0) {
-            console.log(`[Cron] Found ${openShifts.length} open shifts older than 20 hours. Processing...`);
+            console.log(`[Cron] Found ${openShifts.length} expired open shifts. Processing...`);
             for (const record of openShifts) {
                 // Check if they had a completed shift earlier in the day
-                const hasCompletedShifts = record.shifts && record.shifts.some(s => s.checkOut);
+                const hasCompletedShifts = record.shifts && record.shifts.some(s => s.checkOut && !s.missed);
                 record.status = hasCompletedShifts ? 'Present' : 'Absent';
                 
                 // Flag the last open shift entry as missed
@@ -42,7 +50,10 @@ const runAutoCheckOut = async () => {
                     }
                 }
 
-                // We no longer set record.checkOut = record.checkIn; so it remains null (missing checkout)
+                if (!record.shifts || record.shifts.length === 0) {
+                    record.shifts = [{ checkIn: record.checkIn, checkOut: null, duration: 0, missed: true }];
+                }
+                // Keep the original date and leave checkout missing.
                 record.isCheckingOut = false;
                 await record.save();
             }

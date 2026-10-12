@@ -12,4 +12,17 @@ const getMonthEnd = (month) => {
     return date.toISOString().slice(0, 10);
 };
 
-module.exports = { isValidCalendarDate, getMonthEnd };
+// Calendar arithmetic must not depend on the deployment host timezone.
+const addCalendarDays = (value, days) => {
+    if (!isValidCalendarDate(value)) return null;
+    const date = new Date(value + 'T00:00:00.000Z');
+    date.setUTCDate(date.getUTCDate() + days);
+    return date.toISOString().slice(0, 10);
+};
+
+const getCalendarWeekday = (value) => {
+    if (!isValidCalendarDate(value)) return null;
+    return new Date(value + 'T00:00:00.000Z').getUTCDay();
+};
+
+module.exports = { isValidCalendarDate, getMonthEnd, addCalendarDays, getCalendarWeekday };

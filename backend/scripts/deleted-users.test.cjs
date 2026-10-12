@@ -46,7 +46,7 @@ function fixture() {
             require: name => {
                 if (name === '../models/User') return User;
                 if (['../models/Attendance', '../models/Payroll', '../models/Expense'].includes(name)) return Records;
-                if (name === '../utils/reportCron') return { sendDailyReport() {} };
+                if (name === '../utils/reportCron') return { sendDailyReport() {}, async runAutoCheckOut() {} };
                 if (name === './attendanceController') return load('controllers/attendanceController.js');
                 if (name === './payrollController') return load('controllers/payrollController.js');
                 return realRequire(name);
