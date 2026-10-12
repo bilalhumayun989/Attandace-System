@@ -1,5 +1,5 @@
 import { API_BASE_URL } from '../../config';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Search, Mail, Phone, Calendar, Edit2, Trash2, Camera } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../../components/ui/Button';
@@ -40,6 +40,10 @@ const EmployeeList = () => {
     });
 
     const [employees, setEmployees] = useState([]);
+    const [listLoading, setListLoading] = useState(true);
+    const [listError, setListError] = useState('');
+    const [currentPage, setCurrentPage] = useState(1);
+    const pageSize = 50;
     // Dedicated offDay state — isolated from formData to prevent re-render conflicts
     const [selectedOffDay, setSelectedOffDay] = useState(5);
 
@@ -48,6 +52,8 @@ const EmployeeList = () => {
     }, []);
 
     const fetchEmployees = async () => {
+        setListLoading(true);
+        setListError('');
         try {
             const roleHeader = adminUser?.role || 'Admin';
             const response = await fetch(`${API_BASE_URL}/users?includeDeleted=true`, {
@@ -55,11 +61,13 @@ const EmployeeList = () => {
                 credentials: 'include'
             });
             const data = await response.json();
-            if (response.ok) {
-                setEmployees(Array.isArray(data) ? data : []);
-            }
+            if (!response.ok) throw new Error(data.message || 'Could not load employees.');
+            setEmployees(Array.isArray(data) ? data : []);
         } catch (error) {
             console.error('Error fetching employees:', error);
+            setListError(error.message || 'Could not load employees.');
+        } finally {
+            setListLoading(false);
         }
     };
 
@@ -261,11 +269,22 @@ const EmployeeList = () => {
         setMessage({ type: '', text: '' });
     };
 
-    const filteredEmployees = employees.filter(
-        (emp) => emp.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            (emp.employeeId && emp.employeeId.toLowerCase().includes(searchTerm.toLowerCase())) ||
-            emp.role.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    const filteredEmployees = useMemo(() => {
+        const search = searchTerm.toLowerCase();
+        return employees.filter(emp =>
+            (emp.name || '').toLowerCase().includes(search) ||
+            (emp.employeeId || '').toLowerCase().includes(search) ||
+            (emp.role || '').toLowerCase().includes(search)
+        );
+    }, [employees, searchTerm]);
+    const totalPages = Math.max(1, Math.ceil(filteredEmployees.length / pageSize));
+    const visiblePage = Math.min(currentPage, totalPages);
+    const pageStart = (visiblePage - 1) * pageSize;
+    const visibleEmployees = filteredEmployees.slice(pageStart, pageStart + pageSize);
+
+    useEffect(() => {
+        setCurrentPage(page => Math.min(page, totalPages));
+    }, [totalPages]);
 
 
     return (
@@ -293,7 +312,7 @@ const EmployeeList = () => {
                                 placeholder="Search employees..."
                                 className="pl-9 h-9"
                                 value={searchTerm}
-                                onChange={(e) => setSearchTerm(e.target.value)}
+                                onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
                             />
                         </div>
                     </div>
@@ -313,7 +332,13 @@ const EmployeeList = () => {
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-border/40 bg-card">
-                                {filteredEmployees.map((employee) => (
+                                {listLoading && employees.length === 0 && (
+                                    <tr><td colSpan={7} className="p-8 text-center text-muted-foreground" role="status">Loading employees...</td></tr>
+                                )}
+                                {!listLoading && !listError && filteredEmployees.length === 0 && (
+                                    <tr><td colSpan={7} className="p-8 text-center text-muted-foreground">No matching employees found.</td></tr>
+                                )}
+                                {visibleEmployees.map((employee) => (
                                     <tr key={employee._id} className={`hover:bg-muted/30 transition-colors ${employee.status === 'Deleted' ? 'line-through opacity-50 bg-muted/20' : ''}`}>
                                         <td className="p-4 align-middle">
                                             <div className="flex items-center gap-3">
@@ -367,6 +392,24 @@ const EmployeeList = () => {
                             </tbody>
                         </table>
                     </div>
+                    {listError && (
+                        <div className="mt-3 flex items-center justify-between gap-3 text-sm text-destructive" role="alert">
+                            <span>{listError}</span>
+                            <Button variant="outline" size="sm" onClick={fetchEmployees} disabled={listLoading}>Retry</Button>
+                        </div>
+                    )}
+                    {filteredEmployees.length > 0 && (
+                        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+                            <span>Showing {pageStart + 1}?{Math.min(pageStart + pageSize, filteredEmployees.length)} of {filteredEmployees.length} employees</span>
+                            {totalPages > 1 && (
+                                <div className="flex items-center gap-2">
+                                    <Button variant="outline" size="sm" disabled={visiblePage === 1} onClick={() => setCurrentPage(visiblePage - 1)}>Previous</Button>
+                                    <span>Page {visiblePage} of {totalPages}</span>
+                                    <Button variant="outline" size="sm" disabled={visiblePage === totalPages} onClick={() => setCurrentPage(visiblePage + 1)}>Next</Button>
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </CardContent>
             </Card>
 

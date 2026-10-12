@@ -170,15 +170,21 @@ const AttendanceTracker = () => {
 
     const handleExport = () => {
         const headers = ['Date', 'Employee ID', 'Name', 'Check In', 'Check Out', 'Duration', 'Status'];
-        const rows = filteredAttendance.map(r => [
-            r.date,
-            `"${r.userId?.employeeId || 'N/A'}"`,
-            `"${r.userId?.name || 'Unknown'}"`,
-            `"${r.checkIn ? format12h(r.checkIn) : '-'}"`,
-            `"${r.checkOut ? format12h(r.checkOut) : '-'}"`,
-            `"${calculateHours(r.duration)}"`,
-            `"${r.status}"`
-        ]);
+        const rows = filteredAttendance.map(r => {
+            // Prefer the latest completed session when a later checkout was missed.
+            const completedShift = [...(r.shifts || [])].reverse().find(s => s.checkIn && s.checkOut && !s.missed);
+            const reportCheckIn = completedShift ? completedShift.checkIn : r.checkIn;
+            const reportCheckOut = completedShift ? completedShift.checkOut : r.checkOut;
+            return [
+                r.date,
+                `"${r.userId?.employeeId || 'N/A'}"`,
+                `"${r.userId?.name || 'Unknown'}"`,
+                `"${reportCheckIn ? format12h(reportCheckIn) : '-'}"`,
+                `"${reportCheckOut ? format12h(reportCheckOut) : '-'}"`,
+                `"${calculateHours(r.duration)}"`,
+                `"${r.status}"`
+            ];
+        });
 
         const csvContent = [headers.map(h => `"${h}"`), ...rows].map(e => e.join(",")).join("\n");
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });

@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Landing from './pages/Landing';
 import Login from './pages/auth/Login';
@@ -19,11 +20,11 @@ import AdminSettings from './pages/admin/AdminSettings';
 
 import AppLayout from './layouts/AppLayout';
 import EmployeeLayout from './layouts/EmployeeLayout';
-import UserDashboard from './pages/employee/UserDashboard';
+const UserDashboard = lazy(() => import('./pages/employee/UserDashboard'));
 import MyAttendance from './pages/employee/MyAttendance';
 import Profile from './pages/employee/Profile';
 
-import FaceKiosk from './pages/FaceKiosk';
+const FaceKiosk = lazy(() => import('./pages/FaceKiosk'));
 
 
 
@@ -56,7 +57,7 @@ function App() {
             <Route path="/verify-email/:token" element={<VerifyEmail />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password/:token" element={<ResetPassword />} />
-            <Route path="/kiosk" element={<FaceKiosk />} />
+            <Route path="/kiosk" element={<Suspense fallback={<div className="p-8 text-center" role="status">Loading kiosk...</div>}><FaceKiosk /></Suspense>} />
 
             {/* Admin Routes */}
             <Route element={<ProtectedRoute allowedRoles={['Admin']} />}>
@@ -93,7 +94,7 @@ function App() {
             <Route element={<ProtectedRoute allowedRoles={['Employee']} />}>
               <Route path="/employee" element={<EmployeeLayout />}>
                 <Route index element={<Navigate to="/employee/dashboard" replace />} />
-                <Route path="dashboard" element={<UserDashboard />} />
+                <Route path="dashboard" element={<Suspense fallback={<div className="p-8 text-center" role="status">Loading dashboard...</div>}><UserDashboard /></Suspense>} />
                 <Route path="attendance" element={<MyAttendance />} />
 
 

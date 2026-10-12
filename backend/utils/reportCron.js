@@ -246,12 +246,16 @@ const sendDailyReport = async (tenantId = null) => {
             ];
 
             tenantAttendance.forEach(r => {
+                // Summary times must come from one completed session, not a later missed checkout.
+                const completedShift = [...(r.shifts || [])].reverse().find(s => s.checkIn && s.checkOut && !s.missed);
+                const reportCheckIn = completedShift ? completedShift.checkIn : r.checkIn;
+                const reportCheckOut = completedShift ? completedShift.checkOut : r.checkOut;
                 worksheet.addRow({
                     empId:    r.userId?.employeeId || 'N/A',
                     name:     r.userId?.name       || 'Unknown',
                     dept:     r.userId?.department || 'N/A',
-                    checkIn:  r.checkIn  ? formatInTimeZone(r.checkIn,  'Asia/Karachi', 'hh:mm a') : '-',
-                    checkOut: r.checkOut ? formatInTimeZone(r.checkOut, 'Asia/Karachi', 'hh:mm a') : '-',
+                    checkIn:  reportCheckIn  ? formatInTimeZone(reportCheckIn,  'Asia/Karachi', 'hh:mm a') : '-',
+                    checkOut: reportCheckOut ? formatInTimeZone(reportCheckOut, 'Asia/Karachi', 'hh:mm a') : '-',
                     duration: r.duration ? `${Math.floor(r.duration / 60)}h ${r.duration % 60}m`   : '-',
                     status:   r.status,
                     otStatus: r.overtimeStatus || 'None',

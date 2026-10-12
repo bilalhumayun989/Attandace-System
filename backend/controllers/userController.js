@@ -101,7 +101,11 @@ const getEmployees = async (req, res) => {
         const query = { role: { $nin: ['Admin', 'SuperAdmin'] }, adminId: req.adminId };
         // Employee management includes deleted staff so they can be restored.
         if (req.query.includeDeleted !== 'true') query.status = { $ne: 'Deleted' };
-        const users = await User.find(query).sort({ createdAt: -1 });
+        // The staff list needs enrollment status, not the large biometric data itself.
+        const users = await User.find(query)
+            .select('-password -faceDescriptors -fingerprintTemplate -verificationToken -resetPasswordToken -resetPasswordExpire')
+            .sort({ createdAt: -1 })
+            .lean();
         res.json(users);
     } catch (error) {
         console.error('Error in getEmployees:', error);

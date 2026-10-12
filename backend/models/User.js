@@ -126,6 +126,9 @@ const userSchema = new mongoose.Schema(
 
 
 
+// Staff lists are scoped to a tenant and sorted by newest employee.
+userSchema.index({ adminId: 1, createdAt: -1 });
+
 const User = mongoose.model('User', userSchema);
 
 module.exports = User;
