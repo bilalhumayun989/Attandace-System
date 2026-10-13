@@ -38,7 +38,11 @@ router.get('/stats', getStats);
 router.get('/my-history', getMyAttendanceHistory);
 
 
+const { getBiometricUsers, removeBiometrics } = require('../controllers/biometricController');
+
 // Admin routes
+router.get('/biometrics/users', admin, getBiometricUsers);
+router.delete('/biometrics', admin, removeBiometrics);
 router.get('/', admin, requirePermission('attendance', 'view'), getAllAttendance);
 router.get('/user/:userId', admin, requirePermission('attendance', 'view'), getUserAttendanceHistory);
 router.post('/report/send', admin, requirePermission('attendance', 'view'), triggerManualReport);
