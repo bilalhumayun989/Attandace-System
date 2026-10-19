@@ -337,7 +337,7 @@ const path = require('node:path');
 const { formatInTimeZone } = require('date-fns-tz');
 const Employee = require('../models/User');
 const Attendance = require('../models/Attendance');
-const { runAutoCheckOut } = require('../utils/reportCron');
+const { runAutoCheckOut, withAttendanceTransaction } = require('../utils/reportCron');
 const router = express.Router();
 
 // Optional private config created by setup-fingerprint.cjs in this same directory.
@@ -467,13 +467,12 @@ router.post('/fingerprint-remove', enrollAuth, async (req, res) => {
 });
 
 // Prevent overlapping fingerprint requests within this Node process.
-// This is NOT a distributed lock and does not coordinate with the face controller.
+// Transactions also serialize fingerprint scans and cron across Node processes.
 const inFlight = new Set();
 router.post('/fingerprint-checkin', kioskAuth, async (req, res) => {
   let lockKey;
   try {
     const { userId, clientId } = req.body || {};
-    const isOffline = (req.body || {}).offline === true;
     if (!validId(userId)) return res.status(400).json({ message: 'ملازم کی معلومات درست نہیں ہیں۔' });
     if (clientId !== undefined && !validClientId(clientId)) {
       return res.status(400).json({ action: 'rejected', message: 'clientId is not valid.' });
@@ -506,103 +505,152 @@ router.post('/fingerprint-checkin', kioskAuth, async (req, res) => {
     };
     const today = getWorkDay(now);
     const scope = { userId: id, adminId: user.adminId };
-    // Same scan sent again (reply was lost, or queue replay after a live attempt): do nothing.
-    if (clientId && await Attendance.exists({ ...scope, clientIds: clientId })) {
-      return res.json({ action: 'duplicate', employeeName: user.name, message: 'Scan was already recorded.' });
-    }
-    const stampScan = record => {
-      if (clientId) record.clientIds = [...(record.clientIds || []), clientId];
-    };
-    const minutesBetween = (start, end) => Math.max(0, Math.floor((end - start) / 60000));
-    const finishSession = (record, start, end) => {
-      const minutes = minutesBetween(start, end);
-      if (!record.shifts) record.shifts = [];
-      const last = record.shifts[record.shifts.length - 1];
-      if (last && !last.checkOut && !last.missed) {
-        last.checkIn = start;
-        last.checkOut = end;
-        last.duration = minutes;
-        last.missed = false;
-      } else {
-        record.shifts.push({ checkIn: start, checkOut: end, duration: minutes, missed: false });
+    const reply = await withAttendanceTransaction(scope, async (session) => {
+      // Buffer the response until both workdays and the scan id have committed.
+      const result = (body, code = 200) => ({ code, body });
+      if (clientId && await Attendance.exists({ ...scope, clientIds: clientId }).session(session)) {
+        return result({ action: 'duplicate', employeeName: user.name, message: 'Scan was already recorded.' });
       }
-      record.checkOut = end;
-      record.duration = (record.duration || 0) + minutes;
-      record.status = 'Present';
-      // markedByFace is deliberately preserved.
-    };
+      const newerPunch = await Attendance.exists({ ...scope, $or: [
+        { checkIn: { $gt: now }, checkInSource: { $ne: 'boundary' } },
+        { checkOut: { $gt: now }, checkOutSource: { $nin: ['boundary', 'automatic'] } }
+      ] }).session(session);
+      if (newerPunch) return result({ action: 'rejected', message: 'Scan predates a newer recorded punch.' }, 409);
 
-    await runAutoCheckOut(scope, isOffline ? now : null);
-    let open = await Attendance.findOne({ ...scope, checkIn: { $ne: null }, checkOut: null,
-      $expr: { $ne: [{ $arrayElemAt: ['$shifts.missed', -1] }, true] }
-    }).sort({ checkIn: -1 });
-    if (open && now - new Date(open.checkIn) > 20 * 60 * 60 * 1000) {
-      if (!open.shifts) open.shifts = [];
-      const last = open.shifts[open.shifts.length - 1];
-      if (last && !last.checkOut) last.missed = true;
-      else open.shifts.push({ checkIn: open.checkIn, duration: 0, missed: true });
-      open.status = open.shifts.some(s => s.checkOut && !s.missed) ? 'Present' : 'Absent';
-      open.checkOut = null; // A missed checkout must not fabricate a punch.
-      await open.save();
-      open = null;
-    }
+      // A real offline OUT may arrive after cron's automatic closure. Replace only
+      // that automatic allocation, in this transaction, using the real scan time.
+      if ((req.body || {}).offline === true) {
+        const automatic = await Attendance.findOne({ ...scope, shifts: { $elemMatch: {
+          checkOutSource: 'automatic', sessionStart: { $lte: now }, checkOut: { $gt: now }
+        } } }).session(session);
+        const autoShift = automatic?.shifts.find(shift => shift.checkOutSource === 'automatic' &&
+          shift.sessionStart <= now && shift.checkOut > now);
+        if (autoShift) {
+          const originalStart = autoShift.sessionStart;
+          const elapsedMinutes = (now - originalStart) / 60000;
+          if (elapsedMinutes < 30) return result({
+            action: 'too_soon', status: 'checked_in', employeeName: user.name,
+            retryAfterSeconds: Math.max(1, Math.ceil((30 - elapsedMinutes) * 60)),
+            message: 'روانگی آمد کے کم از کم 30 منٹ بعد درج ہو سکتی ہے۔'
+          });
+          const allocated = await Attendance.find({ ...scope, 'shifts.sessionStart': originalStart }).session(session);
+          for (const record of allocated) {
+            const first = record.shifts.find(shift => +shift.sessionStart === +originalStart && +shift.checkIn === +originalStart);
+            record.shifts = record.shifts.filter(shift => +shift.sessionStart !== +originalStart);
+            if (first) record.shifts.push({ checkIn: originalStart, checkOut: null, duration: 0,
+              missed: false, sessionStart: originalStart, checkInSource: first.checkInSource });
+            if (!record.shifts.length) {
+              await record.deleteOne({ session });
+              continue;
+            }
+            const last = record.shifts[record.shifts.length - 1];
+            record.checkIn = last.checkIn;
+            record.checkOut = last.checkOut;
+            record.checkInSource = last.checkInSource;
+            record.checkOutSource = last.checkOutSource;
+            record.duration = record.shifts.reduce((total, shift) => total + (shift.missed ? 0 : shift.duration || 0), 0);
+            await record.save({ session });
+          }
+        }
+      }
+      const stampScan = record => {
+        if (clientId) record.clientIds = [...(record.clientIds || []), clientId];
+      };
+      const minutesBetween = (start, end) => Math.max(0, Math.floor((end - start) / 60000));
+      const finishSession = (record, start, end, checkOutSource = 'fingerprint', sessionStart = start) => {
+        const minutes = minutesBetween(start, end);
+        if (!record.shifts) record.shifts = [];
+        const last = record.shifts[record.shifts.length - 1];
+        if (last && !last.checkOut && !last.missed) {
+          last.checkIn = start;
+          last.checkOut = end;
+          last.duration = minutes;
+          last.missed = false;
+        } else {
+          record.shifts.push({ checkIn: start, checkOut: end, duration: minutes, missed: false });
+        }
+        const finished = record.shifts[record.shifts.length - 1];
+        finished.checkInSource = +start === +sessionStart ? record.checkInSource : 'boundary';
+        finished.checkOutSource = checkOutSource;
+        finished.sessionStart = sessionStart;
+        record.checkOut = end;
+        record.checkOutSource = checkOutSource;
+        record.duration = (record.duration || 0) + minutes;
+        record.status = 'Present';
+        // markedByFace is deliberately preserved.
+      };
 
-    if (open) {
-      const start = new Date(open.checkIn);
-      const elapsedMinutes = (now - start) / 60000;
-      if (elapsedMinutes < 30) {
-        return res.json({
-          action: 'too_soon', status: 'checked_in', employeeName: user.name,
-          retryAfterSeconds: Math.max(1, Math.ceil((30 - elapsedMinutes) * 60)),
-          message: 'روانگی آمد کے کم از کم 30 منٹ بعد درج ہو سکتی ہے۔'
+      // Use scan time and bypass cron's sync grace for the 20-hour cutoff.
+      await runAutoCheckOut(scope, now, session);
+      const open = await Attendance.findOne({ ...scope, checkIn: { $ne: null }, checkOut: null,
+        $expr: { $ne: [{ $arrayElemAt: ['$shifts.missed', -1] }, true] }
+      }).sort({ checkIn: -1 }).session(session);
+
+      if (open) {
+        const start = new Date(open.checkIn);
+        const elapsedMinutes = (now - start) / 60000;
+        if (elapsedMinutes < 30) {
+          return result({
+            action: 'too_soon', status: 'checked_in', employeeName: user.name,
+            retryAfterSeconds: Math.max(1, Math.ceil((30 - elapsedMinutes) * 60)),
+            message: 'روانگی آمد کے کم از کم 30 منٹ بعد درج ہو سکتی ہے۔'
+          });
+        }
+        const startWorkDay = getWorkDay(start);
+        if (startWorkDay === today) {
+          finishSession(open, start, now);
+          stampScan(open);
+          await open.save({ session });
+        } else {
+          const boundary = new Date(today + 'T06:00:00.000+05:00');
+          let nextDay = await Attendance.findOne({ ...scope, date: today }).session(session);
+          if (!nextDay) nextDay = new Attendance({ ...scope, date: today, status: 'Present', shifts: [] });
+          finishSession(open, start, boundary, 'boundary');
+          nextDay.checkIn = boundary;
+          nextDay.checkInSource = 'boundary';
+          finishSession(nextDay, boundary, now, 'fingerprint', start);
+          stampScan(nextDay);
+          await open.validate();
+          await nextDay.validate();
+          await open.save({ session });
+          await nextDay.save({ session });
+        }
+        return result({
+          action: 'checkout', status: 'checked_out', employeeName: user.name,
+          workedMinutes: minutesBetween(start, now), serverTime: now.toISOString(),
+          message: 'آپ کی روانگی درج ہو گئی ہے۔'
         });
       }
-      const startWorkDay = getWorkDay(start);
-      if (startWorkDay === today) {
-        finishSession(open, start, now);
-        stampScan(open);
-        await open.save();
-      } else {
-        const boundary = new Date(`${today}T06:00:00.000+05:00`);
-        let nextDay = await Attendance.findOne({ ...scope, date: today });
-        if (!nextDay) nextDay = new Attendance({ ...scope, date: today, status: 'Present', shifts: [] });
-        finishSession(open, start, boundary);
-        nextDay.checkIn = boundary;
-        finishSession(nextDay, boundary, now);
-        stampScan(nextDay);
-        await open.validate();
-        await nextDay.validate();
-        // Preserves the supplied two-write flow; these saves are not a transaction.
-        await open.save();
-        await nextDay.save();
-      }
-      return res.json({
-        action: 'checkout', status: 'checked_out', employeeName: user.name,
-        workedMinutes: minutesBetween(start, now), serverTime: now.toISOString(),
-        message: 'آپ کی روانگی درج ہو گئی ہے۔'
-      });
-    }
 
-    let attendance = await Attendance.findOne({ ...scope, date: today });
-    if (attendance?.checkOut && now - new Date(attendance.checkOut) < 600000) {
-      return res.json({
-        action: 'too_soon', status: 'checked_out', employeeName: user.name,
-        retryAfterSeconds: Math.max(1, Math.ceil((600000 - (now - new Date(attendance.checkOut))) / 1000)),
-        message: 'Already checked out. Please wait 10 minutes before starting your next shift.'
-      });
-    }
-    if (!attendance) attendance = new Attendance({ ...scope, date: today, duration: 0, shifts: [] });
-    attendance.checkIn = now;
-    attendance.checkOut = null;
-    attendance.status = 'Present';
-    if (!attendance.shifts) attendance.shifts = [];
-    attendance.shifts.push({ checkIn: now, checkOut: null, duration: 0, missed: false });
-    stampScan(attendance);
-    await attendance.save();
-    return res.status(201).json({
-      action: 'checkin', status: 'checked_in', employeeName: user.name,
-      serverTime: now.toISOString(), message: 'آپ کی آمد درج ہو گئی ہے۔'
+      let attendance = await Attendance.findOne({ ...scope, date: today }).session(session);
+      // The previous real or automatic OUT may belong to yesterday's workday.
+      const previous = await Attendance.findOne({ ...scope, checkOut: { $ne: null },
+        checkOutSource: { $ne: 'boundary' }
+      }).sort({ checkOut: -1 }).session(session);
+      if (previous?.checkOut && now - new Date(previous.checkOut) < 600000) {
+        return result({
+          action: 'too_soon', status: 'checked_out', employeeName: user.name,
+          retryAfterSeconds: Math.max(1, Math.ceil((600000 - (now - new Date(previous.checkOut))) / 1000)),
+          message: 'Already checked out. Please wait 10 minutes before starting your next shift.'
+        });
+      }
+      if (!attendance) attendance = new Attendance({ ...scope, date: today, duration: 0, shifts: [] });
+      attendance.checkIn = now;
+      attendance.checkInSource = 'fingerprint';
+      attendance.checkOut = null;
+      attendance.checkOutSource = undefined;
+      attendance.status = 'Present';
+      if (!attendance.shifts) attendance.shifts = [];
+      attendance.shifts.push({ checkIn: now, checkOut: null, duration: 0, missed: false,
+        checkInSource: 'fingerprint', sessionStart: now });
+      stampScan(attendance);
+      await attendance.save({ session });
+      return result({
+        action: 'checkin', status: 'checked_in', employeeName: user.name,
+        serverTime: now.toISOString(), message: 'آپ کی آمد درج ہو گئی ہے۔'
+      }, 201);
     });
+    return res.status(reply.code).json(reply.body);
   } catch (error) {
     console.error('[Fingerprint attendance]', error);
     if (error.code === 11000) {

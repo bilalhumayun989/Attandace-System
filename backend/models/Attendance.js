@@ -3,6 +3,10 @@ const mongoose = require('mongoose');
 const shiftSessionSchema = new mongoose.Schema({
     checkIn: { type: Date },
     checkOut: { type: Date },
+    // Boundary entries allocate hours; they are not device punches.
+    checkInSource: { type: String, enum: ['fingerprint', 'boundary'] },
+    checkOutSource: { type: String, enum: ['fingerprint', 'boundary', 'automatic'] },
+    sessionStart: { type: Date }, // original IN shared by both workday segments
     duration: { type: Number, default: 0 }, // in minutes
     missed: { type: Boolean, default: false }, // true = employee checked in but never checked out
 }, { _id: false });
@@ -24,6 +28,8 @@ const attendanceSchema = new mongoose.Schema(
         checkOut: {
             type: Date,
         },
+        checkInSource: { type: String, enum: ['fingerprint', 'boundary'] },
+        checkOutSource: { type: String, enum: ['fingerprint', 'boundary', 'automatic'] },
         duration: {
             type: Number, // in minutes — total for the day (sum of all shifts)
             default: 0,
@@ -89,6 +95,7 @@ const attendanceSchema = new mongoose.Schema(
     },
     {
         timestamps: true,
+        optimisticConcurrency: true,
     }
 );
 

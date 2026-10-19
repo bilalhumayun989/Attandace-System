@@ -27,7 +27,7 @@ function fixture(records = [], now = NOW) {
         }
         return value === null ? actual == null : actual === value;
     });
-    const chain = value => ({ select() { return this; }, sort() { return this; }, then(resolve, reject) { return Promise.resolve(value).then(resolve, reject); } });
+    const chain = value => ({ select() { return this; }, session() { return this; }, sort() { return this; }, then(resolve, reject) { return Promise.resolve(value).then(resolve, reject); } });
     const Attendance = {
         find: q => chain(records.filter(r => matches(r, q))),
         findOne: q => chain(records.find(r => matches(r, q)) || null),
@@ -75,64 +75,4 @@ for (const bulk of [false, true]) {
     });
 }
 
-const missed = (overrides = {}) => ({ userId: 'employee', adminId: 'tenant', date: '2026-10-10', checkIn: new Date('2026-10-10T17:05:00+05:00'), checkOut: null, status: 'Present', duration: 0, shifts: [], ...overrides });
-test('history finalizes yesterday without a checkout or a next-day duplicate', async () => {
-    const f = fixture([missed()]);
-    f.user.joinDate = '2026-10-10';
-    await f.controller.reconcileAttendance(f.user._id);
-    assert.equal(f.records.length, 1);
-    assert.equal(f.records[0].date, '2026-10-10');
-    assert.equal(f.records[0].status, 'Absent');
-    assert.equal(f.records[0].checkOut, null);
-    assert.equal(f.records[0].shifts.at(-1).missed, true);
-    await f.cron.runAutoCheckOut({ userId: 'employee' });
-    assert.equal(f.saves(), 1);
-});
-
-test('expired shift is excluded from the next-day timer state', async () => {
-    const f = fixture([missed()]);
-    const res = { json(body) { this.body = body; }, status() { return this; } };
-    await f.controller.getAttendanceStatus({ user: { _id: 'employee' } }, res);
-    assert.equal(res.body, null);
-    assert.equal(f.records[0].date, '2026-10-10');
-    assert.equal(f.records[0].status, 'Absent');
-});
-
-test('earlier missed shift does not block expiry of a later open shift', async () => {
-    const checkIn = new Date('2026-10-10T17:05:00+05:00');
-    const f = fixture([missed({ shifts: [{ missed: true }, { checkIn, checkOut: null, missed: false }] })]);
-    await f.cron.runAutoCheckOut({ userId: 'employee' });
-    assert.equal(f.records[0].shifts.at(-1).missed, true);
-    assert.equal(f.records[0].status, 'Absent');
-});
-
-test('completed work is preserved and other tenants and current-day shifts are untouched', async () => {
-    const checkIn = new Date('2026-10-10T17:05:00+05:00');
-    const f = fixture([
-        missed({ duration: 60, shifts: [{ checkIn, checkOut: new Date('2026-10-10T12:00:00+05:00'), duration: 60 }, { checkIn, checkOut: null }] }),
-        missed({ adminId: 'other' }),
-        missed({ date: '2026-10-11', checkIn: new Date('2026-10-11T14:00:00+05:00') })
-    ]);
-    await f.cron.runAutoCheckOut({ adminId: 'tenant' });
-    assert.equal(f.records[0].status, 'Present');
-    assert.equal(f.records[0].duration, 60);
-    assert.equal(f.records[0].shifts.at(-1).missed, true);
-    assert.equal(f.records[1].shifts.length, 0);
-    assert.equal(f.records[2].shifts.length, 0);
-    assert.equal(f.saves(), 1);
-});
-
-test('a 5 PM missed checkout remains overnight then expires at 6 AM on its original date', async () => {
-    const overnight = fixture([missed()], '2026-10-11T05:59:59+05:00');
-    await overnight.cron.runAutoCheckOut({ userId: 'employee' });
-    assert.equal(overnight.saves(), 0);
-    assert.equal(overnight.records[0].status, 'Present');
-    const morning = fixture([missed()], '2026-10-11T06:00:00+05:00');
-    morning.user.joinDate = '2026-10-10';
-    await morning.controller.reconcileAttendance('employee');
-    assert.equal(morning.records.length, 1);
-    assert.equal(morning.records[0].date, '2026-10-10');
-    assert.equal(morning.records[0].status, 'Absent');
-    assert.equal(morning.records[0].checkOut, null);
-    assert.equal(morning.records[0].shifts.at(-1).missed, true);
-});
+// Overnight closure, split, concurrency and recovery cases live in attendance-boundary.test.cjs.

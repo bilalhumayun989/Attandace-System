@@ -14,62 +14,87 @@ const getPKTDateString = (date = new Date()) => {
     return formatInTimeZone(date, 'Asia/Karachi', 'yyyy-MM-dd');
 };
 
-// asOf (optional Date): used when an offline kiosk scan is replayed later. The expired-shift
-// check then runs as of the scan's own time, so replaying yesterday's check-out does not see
-// yesterday's open shift as already missed. Without asOf (cron / live scans) the real time is
-// used, and records saved in the last 10 minutes are skipped so a sync that is still replaying
-// scans is not cut in half by the cron.
+// A write to the same employee serializes cron and fingerprint transactions across
+// Node processes, including concurrent first check-ins on different workdays.
+const withAttendanceTransaction = (scope, work) => Attendance.db.transaction(async (session) => {
+    const locked = await User.updateOne(
+        { _id: scope.userId, adminId: scope.adminId, status: { $ne: 'Deleted' } },
+        { $inc: { __v: 1 } }, { session, timestamps: false }
+    );
+    if (!locked.matchedCount) throw new Error('Attendance employee is no longer available.');
+    return work(session);
+}, { readPreference: 'primary', readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
+
+// Replayed scans use their original time; cron skips recently synchronized records.
 const OFFLINE_SYNC_GRACE_MS = 10 * 60 * 1000;
-const runAutoCheckOut = async (scope = {}, asOf = null) => {
+const runAutoCheckOut = async (scope = {}, asOf = null, session = null) => {
     try {
         const pktNow = getPKTTime(asOf || undefined);
         const twentyHoursAgo = new Date(pktNow.getTime() - (20 * 60 * 60 * 1000));
-
-        // Overnight attendance belongs to its original workday until 6 AM PKT.
-        const workDay = getPKTDateString(new Date(pktNow.getTime() - 6 * 60 * 60 * 1000));
-        // Finalize a missing checkout when its workday ends, or at the 20-hour limit.
-        const openShifts = await Attendance.find({
+        // Crossing 6 AM does not expire a shift; only the 20-hour limit does.
+        const filter = {
             ...scope,
-            checkIn: { $ne: null },
-            $or: [
-                { date: { $lt: workDay } },
-                { checkIn: { $lt: twentyHoursAgo } }
-            ],
+            checkIn: { $ne: null, $lte: twentyHoursAgo },
             checkOut: null,
             status: { $ne: 'On Leave' },
-            // Earlier missed sessions must not prevent finalizing a later open session.
             $expr: { $ne: [{ $arrayElemAt: ['$shifts.missed', -1] }, true] },
             ...(asOf ? {} : { $and: [{ $or: [
                 { updatedAt: { $exists: false } },
                 { updatedAt: { $lt: new Date(Date.now() - OFFLINE_SYNC_GRACE_MS) } }
             ] }] })
-        });
-
-        if (openShifts.length > 0) {
-            console.log(`[Cron] Found ${openShifts.length} expired open shifts. Processing...`);
-            for (const record of openShifts) {
-                // Check if they had a completed shift earlier in the day
-                const hasCompletedShifts = record.shifts && record.shifts.some(s => s.checkOut && !s.missed);
-                record.status = hasCompletedShifts ? 'Present' : 'Absent';
-                
-                // Flag the last open shift entry as missed
-                if (record.shifts && record.shifts.length > 0) {
-                    const lastEntry = record.shifts[record.shifts.length - 1];
-                    if (lastEntry && !lastEntry.checkOut) {
-                        lastEntry.missed = true;
-                    }
+        };
+        const openShifts = await Attendance.find(filter).session(session);
+        for (const candidate of openShifts) {
+            const close = async (activeSession) => {
+                // Re-read after acquiring the employee write lock; a scan may have won.
+                const record = await Attendance.findOne({ ...filter, _id: candidate._id }).session(activeSession);
+                if (!record) return;
+                const start = new Date(record.checkIn);
+                const end = new Date(start.getTime() + 20 * 60 * 60 * 1000);
+                const endWorkDay = getPKTDateString(new Date(end.getTime() - 6 * 60 * 60 * 1000));
+                const boundary = new Date(endWorkDay + 'T06:00:00.000+05:00');
+                const finishSession = (attendance, checkIn, checkOut) => {
+                    const duration = Math.max(0, Math.floor((checkOut - checkIn) / 60000));
+                    const checkInSource = checkIn > start ? 'boundary' : record.checkInSource;
+                    const checkOutSource = +checkOut === +end ? 'automatic' : 'boundary';
+                    const entry = { checkIn, checkOut, duration, missed: false,
+                        checkInSource, checkOutSource, sessionStart: start };
+                    if (!attendance.shifts) attendance.shifts = [];
+                    const last = attendance.shifts[attendance.shifts.length - 1];
+                    if (last && !last.checkOut && !last.missed) Object.assign(last, entry);
+                    else attendance.shifts.push(entry);
+                    attendance.checkOut = checkOut;
+                    attendance.checkOutSource = checkOutSource;
+                    attendance.duration = (attendance.duration || 0) + duration;
+                    attendance.status = 'Present';
+                    attendance.isCheckingOut = false;
+                };
+                if (start < boundary) {
+                    let nextDay = await Attendance.findOne({
+                        userId: record.userId, adminId: record.adminId, date: endWorkDay
+                    }).session(activeSession);
+                    if (!nextDay) nextDay = new Attendance({
+                        userId: record.userId, adminId: record.adminId, date: endWorkDay, shifts: []
+                    });
+                    finishSession(record, start, boundary);
+                    nextDay.checkIn = boundary;
+                    nextDay.checkInSource = 'boundary';
+                    finishSession(nextDay, boundary, end);
+                    await record.save({ session: activeSession });
+                    await nextDay.save({ session: activeSession });
+                } else {
+                    finishSession(record, start, end);
+                    await record.save({ session: activeSession });
                 }
-
-                if (!record.shifts || record.shifts.length === 0) {
-                    record.shifts = [{ checkIn: record.checkIn, checkOut: null, duration: 0, missed: true }];
-                }
-                // Keep the original date and leave checkout missing.
-                record.isCheckingOut = false;
-                await record.save();
-            }
+            };
+            if (session) await close(session);
+            else await withAttendanceTransaction(candidate, close);
         }
     } catch (error) {
+        // Let an enclosing scan transaction abort and retry transient conflicts.
+        if (session) throw error;
         console.error('[Cron Error] Failed to run auto checkout:', error);
+        throw error;
     }
 };
 
@@ -429,7 +454,7 @@ const autoGenerateAndSendPayroll = async (cycle, monthOffset = 0) => {
 
 // Schedule to run every 5 minutes for auto-checkout
 cron.schedule('*/5 * * * *', () => {
-    runAutoCheckOut();
+    runAutoCheckOut().catch(error => console.error('[Cron Error]', error));
 }, {
     scheduled: true,
     timezone: "Asia/Karachi"
@@ -461,4 +486,4 @@ cron.schedule('0 6 16 * *', () => {
     timezone: "Asia/Karachi"
 });
 
-module.exports = { sendDailyReport, runAutoCheckOut, autoGenerateAndSendPayroll };
+module.exports = { sendDailyReport, runAutoCheckOut, autoGenerateAndSendPayroll, withAttendanceTransaction };

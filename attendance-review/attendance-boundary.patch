@@ -1,0 +1,887 @@
+diff --git a/backend/models/Attendance.js b/backend/models/Attendance.js
+index e953d88..ca226cf 100644
+--- a/backend/models/Attendance.js
++++ b/backend/models/Attendance.js
+@@ -3,6 +3,10 @@ const mongoose = require('mongoose');
+ const shiftSessionSchema = new mongoose.Schema({
+     checkIn: { type: Date },
+     checkOut: { type: Date },
++    // Boundary entries allocate hours; they are not device punches.
++    checkInSource: { type: String, enum: ['fingerprint', 'boundary'] },
++    checkOutSource: { type: String, enum: ['fingerprint', 'boundary', 'automatic'] },
++    sessionStart: { type: Date }, // original IN shared by both workday segments
+     duration: { type: Number, default: 0 }, // in minutes
+     missed: { type: Boolean, default: false }, // true = employee checked in but never checked out
+ }, { _id: false });
+@@ -24,6 +28,8 @@ const attendanceSchema = new mongoose.Schema(
+         checkOut: {
+             type: Date,
+         },
++        checkInSource: { type: String, enum: ['fingerprint', 'boundary'] },
++        checkOutSource: { type: String, enum: ['fingerprint', 'boundary', 'automatic'] },
+         duration: {
+             type: Number, // in minutes — total for the day (sum of all shifts)
+             default: 0,
+@@ -89,6 +95,7 @@ const attendanceSchema = new mongoose.Schema(
+     },
+     {
+         timestamps: true,
++        optimisticConcurrency: true,
+     }
+ );
+ 
+diff --git a/backend/routes/attendanceFingerprint.routes.js b/backend/routes/attendanceFingerprint.routes.js
+index 4987391..c6a37aa 100644
+--- a/backend/routes/attendanceFingerprint.routes.js
++++ b/backend/routes/attendanceFingerprint.routes.js
+@@ -337,7 +337,7 @@ const path = require('node:path');
+ const { formatInTimeZone } = require('date-fns-tz');
+ const Employee = require('../models/User');
+ const Attendance = require('../models/Attendance');
+-const { runAutoCheckOut } = require('../utils/reportCron');
++const { runAutoCheckOut, withAttendanceTransaction } = require('../utils/reportCron');
+ const router = express.Router();
+ 
+ // Optional private config created by setup-fingerprint.cjs in this same directory.
+@@ -467,13 +467,12 @@ router.post('/fingerprint-remove', enrollAuth, async (req, res) => {
+ });
+ 
+ // Prevent overlapping fingerprint requests within this Node process.
+-// This is NOT a distributed lock and does not coordinate with the face controller.
++// Transactions also serialize fingerprint scans and cron across Node processes.
+ const inFlight = new Set();
+ router.post('/fingerprint-checkin', kioskAuth, async (req, res) => {
+   let lockKey;
+   try {
+     const { userId, clientId } = req.body || {};
+-    const isOffline = (req.body || {}).offline === true;
+     if (!validId(userId)) return res.status(400).json({ message: 'ملازم کی معلومات درست نہیں ہیں۔' });
+     if (clientId !== undefined && !validClientId(clientId)) {
+       return res.status(400).json({ action: 'rejected', message: 'clientId is not valid.' });
+@@ -506,103 +505,152 @@ router.post('/fingerprint-checkin', kioskAuth, async (req, res) => {
+     };
+     const today = getWorkDay(now);
+     const scope = { userId: id, adminId: user.adminId };
+-    // Same scan sent again (reply was lost, or queue replay after a live attempt): do nothing.
+-    if (clientId && await Attendance.exists({ ...scope, clientIds: clientId })) {
+-      return res.json({ action: 'duplicate', employeeName: user.name, message: 'Scan was already recorded.' });
+-    }
+-    const stampScan = record => {
+-      if (clientId) record.clientIds = [...(record.clientIds || []), clientId];
+-    };
+-    const minutesBetween = (start, end) => Math.max(0, Math.floor((end - start) / 60000));
+-    const finishSession = (record, start, end) => {
+-      const minutes = minutesBetween(start, end);
+-      if (!record.shifts) record.shifts = [];
+-      const last = record.shifts[record.shifts.length - 1];
+-      if (last && !last.checkOut && !last.missed) {
+-        last.checkIn = start;
+-        last.checkOut = end;
+-        last.duration = minutes;
+-        last.missed = false;
+-      } else {
+-        record.shifts.push({ checkIn: start, checkOut: end, duration: minutes, missed: false });
++    const reply = await withAttendanceTransaction(scope, async (session) => {
++      // Buffer the response until both workdays and the scan id have committed.
++      const result = (body, code = 200) => ({ code, body });
++      if (clientId && await Attendance.exists({ ...scope, clientIds: clientId }).session(session)) {
++        return result({ action: 'duplicate', employeeName: user.name, message: 'Scan was already recorded.' });
+       }
+-      record.checkOut = end;
+-      record.duration = (record.duration || 0) + minutes;
+-      record.status = 'Present';
+-      // markedByFace is deliberately preserved.
+-    };
+-
+-    await runAutoCheckOut(scope, isOffline ? now : null);
+-    let open = await Attendance.findOne({ ...scope, checkIn: { $ne: null }, checkOut: null,
+-      $expr: { $ne: [{ $arrayElemAt: ['$shifts.missed', -1] }, true] }
+-    }).sort({ checkIn: -1 });
+-    if (open && now - new Date(open.checkIn) > 20 * 60 * 60 * 1000) {
+-      if (!open.shifts) open.shifts = [];
+-      const last = open.shifts[open.shifts.length - 1];
+-      if (last && !last.checkOut) last.missed = true;
+-      else open.shifts.push({ checkIn: open.checkIn, duration: 0, missed: true });
+-      open.status = open.shifts.some(s => s.checkOut && !s.missed) ? 'Present' : 'Absent';
+-      open.checkOut = null; // A missed checkout must not fabricate a punch.
+-      await open.save();
+-      open = null;
+-    }
+-
+-    if (open) {
+-      const start = new Date(open.checkIn);
+-      const elapsedMinutes = (now - start) / 60000;
+-      if (elapsedMinutes < 30) {
+-        return res.json({
+-          action: 'too_soon', status: 'checked_in', employeeName: user.name,
+-          retryAfterSeconds: Math.max(1, Math.ceil((30 - elapsedMinutes) * 60)),
+-          message: 'روانگی آمد کے کم از کم 30 منٹ بعد درج ہو سکتی ہے۔'
+-        });
++      const newerPunch = await Attendance.exists({ ...scope, $or: [
++        { checkIn: { $gt: now }, checkInSource: { $ne: 'boundary' } },
++        { checkOut: { $gt: now }, checkOutSource: { $nin: ['boundary', 'automatic'] } }
++      ] }).session(session);
++      if (newerPunch) return result({ action: 'rejected', message: 'Scan predates a newer recorded punch.' }, 409);
++
++      // A real offline OUT may arrive after cron's automatic closure. Replace only
++      // that automatic allocation, in this transaction, using the real scan time.
++      if ((req.body || {}).offline === true) {
++        const automatic = await Attendance.findOne({ ...scope, shifts: { $elemMatch: {
++          checkOutSource: 'automatic', sessionStart: { $lte: now }, checkOut: { $gt: now }
++        } } }).session(session);
++        const autoShift = automatic?.shifts.find(shift => shift.checkOutSource === 'automatic' &&
++          shift.sessionStart <= now && shift.checkOut > now);
++        if (autoShift) {
++          const originalStart = autoShift.sessionStart;
++          const elapsedMinutes = (now - originalStart) / 60000;
++          if (elapsedMinutes < 30) return result({
++            action: 'too_soon', status: 'checked_in', employeeName: user.name,
++            retryAfterSeconds: Math.max(1, Math.ceil((30 - elapsedMinutes) * 60)),
++            message: 'روانگی آمد کے کم از کم 30 منٹ بعد درج ہو سکتی ہے۔'
++          });
++          const allocated = await Attendance.find({ ...scope, 'shifts.sessionStart': originalStart }).session(session);
++          for (const record of allocated) {
++            const first = record.shifts.find(shift => +shift.sessionStart === +originalStart && +shift.checkIn === +originalStart);
++            record.shifts = record.shifts.filter(shift => +shift.sessionStart !== +originalStart);
++            if (first) record.shifts.push({ checkIn: originalStart, checkOut: null, duration: 0,
++              missed: false, sessionStart: originalStart, checkInSource: first.checkInSource });
++            if (!record.shifts.length) {
++              await record.deleteOne({ session });
++              continue;
++            }
++            const last = record.shifts[record.shifts.length - 1];
++            record.checkIn = last.checkIn;
++            record.checkOut = last.checkOut;
++            record.checkInSource = last.checkInSource;
++            record.checkOutSource = last.checkOutSource;
++            record.duration = record.shifts.reduce((total, shift) => total + (shift.missed ? 0 : shift.duration || 0), 0);
++            await record.save({ session });
++          }
++        }
+       }
+-      const startWorkDay = getWorkDay(start);
+-      if (startWorkDay === today) {
+-        finishSession(open, start, now);
+-        stampScan(open);
+-        await open.save();
+-      } else {
+-        const boundary = new Date(`${today}T06:00:00.000+05:00`);
+-        let nextDay = await Attendance.findOne({ ...scope, date: today });
+-        if (!nextDay) nextDay = new Attendance({ ...scope, date: today, status: 'Present', shifts: [] });
+-        finishSession(open, start, boundary);
+-        nextDay.checkIn = boundary;
+-        finishSession(nextDay, boundary, now);
+-        stampScan(nextDay);
+-        await open.validate();
+-        await nextDay.validate();
+-        // Preserves the supplied two-write flow; these saves are not a transaction.
+-        await open.save();
+-        await nextDay.save();
++      const stampScan = record => {
++        if (clientId) record.clientIds = [...(record.clientIds || []), clientId];
++      };
++      const minutesBetween = (start, end) => Math.max(0, Math.floor((end - start) / 60000));
++      const finishSession = (record, start, end, checkOutSource = 'fingerprint', sessionStart = start) => {
++        const minutes = minutesBetween(start, end);
++        if (!record.shifts) record.shifts = [];
++        const last = record.shifts[record.shifts.length - 1];
++        if (last && !last.checkOut && !last.missed) {
++          last.checkIn = start;
++          last.checkOut = end;
++          last.duration = minutes;
++          last.missed = false;
++        } else {
++          record.shifts.push({ checkIn: start, checkOut: end, duration: minutes, missed: false });
++        }
++        const finished = record.shifts[record.shifts.length - 1];
++        finished.checkInSource = +start === +sessionStart ? record.checkInSource : 'boundary';
++        finished.checkOutSource = checkOutSource;
++        finished.sessionStart = sessionStart;
++        record.checkOut = end;
++        record.checkOutSource = checkOutSource;
++        record.duration = (record.duration || 0) + minutes;
++        record.status = 'Present';
++        // markedByFace is deliberately preserved.
++      };
++
++      // Use scan time and bypass cron's sync grace for the 20-hour cutoff.
++      await runAutoCheckOut(scope, now, session);
++      const open = await Attendance.findOne({ ...scope, checkIn: { $ne: null }, checkOut: null,
++        $expr: { $ne: [{ $arrayElemAt: ['$shifts.missed', -1] }, true] }
++      }).sort({ checkIn: -1 }).session(session);
++
++      if (open) {
++        const start = new Date(open.checkIn);
++        const elapsedMinutes = (now - start) / 60000;
++        if (elapsedMinutes < 30) {
++          return result({
++            action: 'too_soon', status: 'checked_in', employeeName: user.name,
++            retryAfterSeconds: Math.max(1, Math.ceil((30 - elapsedMinutes) * 60)),
++            message: 'روانگی آمد کے کم از کم 30 منٹ بعد درج ہو سکتی ہے۔'
++          });
++        }
++        const startWorkDay = getWorkDay(start);
++        if (startWorkDay === today) {
++          finishSession(open, start, now);
++          stampScan(open);
++          await open.save({ session });
++        } else {
++          const boundary = new Date(today + 'T06:00:00.000+05:00');
++          let nextDay = await Attendance.findOne({ ...scope, date: today }).session(session);
++          if (!nextDay) nextDay = new Attendance({ ...scope, date: today, status: 'Present', shifts: [] });
++          finishSession(open, start, boundary, 'boundary');
++          nextDay.checkIn = boundary;
++          nextDay.checkInSource = 'boundary';
++          finishSession(nextDay, boundary, now, 'fingerprint', start);
++          stampScan(nextDay);
++          await open.validate();
++          await nextDay.validate();
++          await open.save({ session });
++          await nextDay.save({ session });
++        }
++        return result({
++          action: 'checkout', status: 'checked_out', employeeName: user.name,
++          workedMinutes: minutesBetween(start, now), serverTime: now.toISOString(),
++          message: 'آپ کی روانگی درج ہو گئی ہے۔'
++        });
+       }
+-      return res.json({
+-        action: 'checkout', status: 'checked_out', employeeName: user.name,
+-        workedMinutes: minutesBetween(start, now), serverTime: now.toISOString(),
+-        message: 'آپ کی روانگی درج ہو گئی ہے۔'
+-      });
+-    }
+ 
+-    let attendance = await Attendance.findOne({ ...scope, date: today });
+-    if (attendance?.checkOut && now - new Date(attendance.checkOut) < 600000) {
+-      return res.json({
+-        action: 'too_soon', status: 'checked_out', employeeName: user.name,
+-        retryAfterSeconds: Math.max(1, Math.ceil((600000 - (now - new Date(attendance.checkOut))) / 1000)),
+-        message: 'Already checked out. Please wait 10 minutes before starting your next shift.'
+-      });
+-    }
+-    if (!attendance) attendance = new Attendance({ ...scope, date: today, duration: 0, shifts: [] });
+-    attendance.checkIn = now;
+-    attendance.checkOut = null;
+-    attendance.status = 'Present';
+-    if (!attendance.shifts) attendance.shifts = [];
+-    attendance.shifts.push({ checkIn: now, checkOut: null, duration: 0, missed: false });
+-    stampScan(attendance);
+-    await attendance.save();
+-    return res.status(201).json({
+-      action: 'checkin', status: 'checked_in', employeeName: user.name,
+-      serverTime: now.toISOString(), message: 'آپ کی آمد درج ہو گئی ہے۔'
++      let attendance = await Attendance.findOne({ ...scope, date: today }).session(session);
++      // The previous real or automatic OUT may belong to yesterday's workday.
++      const previous = await Attendance.findOne({ ...scope, checkOut: { $ne: null },
++        checkOutSource: { $ne: 'boundary' }
++      }).sort({ checkOut: -1 }).session(session);
++      if (previous?.checkOut && now - new Date(previous.checkOut) < 600000) {
++        return result({
++          action: 'too_soon', status: 'checked_out', employeeName: user.name,
++          retryAfterSeconds: Math.max(1, Math.ceil((600000 - (now - new Date(previous.checkOut))) / 1000)),
++          message: 'Already checked out. Please wait 10 minutes before starting your next shift.'
++        });
++      }
++      if (!attendance) attendance = new Attendance({ ...scope, date: today, duration: 0, shifts: [] });
++      attendance.checkIn = now;
++      attendance.checkInSource = 'fingerprint';
++      attendance.checkOut = null;
++      attendance.checkOutSource = undefined;
++      attendance.status = 'Present';
++      if (!attendance.shifts) attendance.shifts = [];
++      attendance.shifts.push({ checkIn: now, checkOut: null, duration: 0, missed: false,
++        checkInSource: 'fingerprint', sessionStart: now });
++      stampScan(attendance);
++      await attendance.save({ session });
++      return result({
++        action: 'checkin', status: 'checked_in', employeeName: user.name,
++        serverTime: now.toISOString(), message: 'آپ کی آمد درج ہو گئی ہے۔'
++      }, 201);
+     });
++    return res.status(reply.code).json(reply.body);
+   } catch (error) {
+     console.error('[Fingerprint attendance]', error);
+     if (error.code === 11000) {
+diff --git a/backend/scripts/attendance-dates.test.cjs b/backend/scripts/attendance-dates.test.cjs
+index 5a25b62..bb7d3d6 100644
+--- a/backend/scripts/attendance-dates.test.cjs
++++ b/backend/scripts/attendance-dates.test.cjs
+@@ -27,7 +27,7 @@ function fixture(records = [], now = NOW) {
+         }
+         return value === null ? actual == null : actual === value;
+     });
+-    const chain = value => ({ select() { return this; }, sort() { return this; }, then(resolve, reject) { return Promise.resolve(value).then(resolve, reject); } });
++    const chain = value => ({ select() { return this; }, session() { return this; }, sort() { return this; }, then(resolve, reject) { return Promise.resolve(value).then(resolve, reject); } });
+     const Attendance = {
+         find: q => chain(records.filter(r => matches(r, q))),
+         findOne: q => chain(records.find(r => matches(r, q)) || null),
+@@ -75,64 +75,4 @@ for (const bulk of [false, true]) {
+     });
+ }
+ 
+-const missed = (overrides = {}) => ({ userId: 'employee', adminId: 'tenant', date: '2026-10-10', checkIn: new Date('2026-10-10T17:05:00+05:00'), checkOut: null, status: 'Present', duration: 0, shifts: [], ...overrides });
+-test('history finalizes yesterday without a checkout or a next-day duplicate', async () => {
+-    const f = fixture([missed()]);
+-    f.user.joinDate = '2026-10-10';
+-    await f.controller.reconcileAttendance(f.user._id);
+-    assert.equal(f.records.length, 1);
+-    assert.equal(f.records[0].date, '2026-10-10');
+-    assert.equal(f.records[0].status, 'Absent');
+-    assert.equal(f.records[0].checkOut, null);
+-    assert.equal(f.records[0].shifts.at(-1).missed, true);
+-    await f.cron.runAutoCheckOut({ userId: 'employee' });
+-    assert.equal(f.saves(), 1);
+-});
+-
+-test('expired shift is excluded from the next-day timer state', async () => {
+-    const f = fixture([missed()]);
+-    const res = { json(body) { this.body = body; }, status() { return this; } };
+-    await f.controller.getAttendanceStatus({ user: { _id: 'employee' } }, res);
+-    assert.equal(res.body, null);
+-    assert.equal(f.records[0].date, '2026-10-10');
+-    assert.equal(f.records[0].status, 'Absent');
+-});
+-
+-test('earlier missed shift does not block expiry of a later open shift', async () => {
+-    const checkIn = new Date('2026-10-10T17:05:00+05:00');
+-    const f = fixture([missed({ shifts: [{ missed: true }, { checkIn, checkOut: null, missed: false }] })]);
+-    await f.cron.runAutoCheckOut({ userId: 'employee' });
+-    assert.equal(f.records[0].shifts.at(-1).missed, true);
+-    assert.equal(f.records[0].status, 'Absent');
+-});
+-
+-test('completed work is preserved and other tenants and current-day shifts are untouched', async () => {
+-    const checkIn = new Date('2026-10-10T17:05:00+05:00');
+-    const f = fixture([
+-        missed({ duration: 60, shifts: [{ checkIn, checkOut: new Date('2026-10-10T12:00:00+05:00'), duration: 60 }, { checkIn, checkOut: null }] }),
+-        missed({ adminId: 'other' }),
+-        missed({ date: '2026-10-11', checkIn: new Date('2026-10-11T14:00:00+05:00') })
+-    ]);
+-    await f.cron.runAutoCheckOut({ adminId: 'tenant' });
+-    assert.equal(f.records[0].status, 'Present');
+-    assert.equal(f.records[0].duration, 60);
+-    assert.equal(f.records[0].shifts.at(-1).missed, true);
+-    assert.equal(f.records[1].shifts.length, 0);
+-    assert.equal(f.records[2].shifts.length, 0);
+-    assert.equal(f.saves(), 1);
+-});
+-
+-test('a 5 PM missed checkout remains overnight then expires at 6 AM on its original date', async () => {
+-    const overnight = fixture([missed()], '2026-10-11T05:59:59+05:00');
+-    await overnight.cron.runAutoCheckOut({ userId: 'employee' });
+-    assert.equal(overnight.saves(), 0);
+-    assert.equal(overnight.records[0].status, 'Present');
+-    const morning = fixture([missed()], '2026-10-11T06:00:00+05:00');
+-    morning.user.joinDate = '2026-10-10';
+-    await morning.controller.reconcileAttendance('employee');
+-    assert.equal(morning.records.length, 1);
+-    assert.equal(morning.records[0].date, '2026-10-10');
+-    assert.equal(morning.records[0].status, 'Absent');
+-    assert.equal(morning.records[0].checkOut, null);
+-    assert.equal(morning.records[0].shifts.at(-1).missed, true);
+-});
++// Overnight closure, split, concurrency and recovery cases live in attendance-boundary.test.cjs.
+diff --git a/backend/utils/reportCron.js b/backend/utils/reportCron.js
+index 086cda3..e150d94 100644
+--- a/backend/utils/reportCron.js
++++ b/backend/utils/reportCron.js
+@@ -14,62 +14,87 @@ const getPKTDateString = (date = new Date()) => {
+     return formatInTimeZone(date, 'Asia/Karachi', 'yyyy-MM-dd');
+ };
+ 
+-// asOf (optional Date): used when an offline kiosk scan is replayed later. The expired-shift
+-// check then runs as of the scan's own time, so replaying yesterday's check-out does not see
+-// yesterday's open shift as already missed. Without asOf (cron / live scans) the real time is
+-// used, and records saved in the last 10 minutes are skipped so a sync that is still replaying
+-// scans is not cut in half by the cron.
++// A write to the same employee serializes cron and fingerprint transactions across
++// Node processes, including concurrent first check-ins on different workdays.
++const withAttendanceTransaction = (scope, work) => Attendance.db.transaction(async (session) => {
++    const locked = await User.updateOne(
++        { _id: scope.userId, adminId: scope.adminId, status: { $ne: 'Deleted' } },
++        { $inc: { __v: 1 } }, { session, timestamps: false }
++    );
++    if (!locked.matchedCount) throw new Error('Attendance employee is no longer available.');
++    return work(session);
++}, { readPreference: 'primary', readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
++
++// Replayed scans use their original time; cron skips recently synchronized records.
+ const OFFLINE_SYNC_GRACE_MS = 10 * 60 * 1000;
+-const runAutoCheckOut = async (scope = {}, asOf = null) => {
++const runAutoCheckOut = async (scope = {}, asOf = null, session = null) => {
+     try {
+         const pktNow = getPKTTime(asOf || undefined);
+         const twentyHoursAgo = new Date(pktNow.getTime() - (20 * 60 * 60 * 1000));
+-
+-        // Overnight attendance belongs to its original workday until 6 AM PKT.
+-        const workDay = getPKTDateString(new Date(pktNow.getTime() - 6 * 60 * 60 * 1000));
+-        // Finalize a missing checkout when its workday ends, or at the 20-hour limit.
+-        const openShifts = await Attendance.find({
++        // Crossing 6 AM does not expire a shift; only the 20-hour limit does.
++        const filter = {
+             ...scope,
+-            checkIn: { $ne: null },
+-            $or: [
+-                { date: { $lt: workDay } },
+-                { checkIn: { $lt: twentyHoursAgo } }
+-            ],
++            checkIn: { $ne: null, $lte: twentyHoursAgo },
+             checkOut: null,
+             status: { $ne: 'On Leave' },
+-            // Earlier missed sessions must not prevent finalizing a later open session.
+             $expr: { $ne: [{ $arrayElemAt: ['$shifts.missed', -1] }, true] },
+             ...(asOf ? {} : { $and: [{ $or: [
+                 { updatedAt: { $exists: false } },
+                 { updatedAt: { $lt: new Date(Date.now() - OFFLINE_SYNC_GRACE_MS) } }
+             ] }] })
+-        });
+-
+-        if (openShifts.length > 0) {
+-            console.log(`[Cron] Found ${openShifts.length} expired open shifts. Processing...`);
+-            for (const record of openShifts) {
+-                // Check if they had a completed shift earlier in the day
+-                const hasCompletedShifts = record.shifts && record.shifts.some(s => s.checkOut && !s.missed);
+-                record.status = hasCompletedShifts ? 'Present' : 'Absent';
+-                
+-                // Flag the last open shift entry as missed
+-                if (record.shifts && record.shifts.length > 0) {
+-                    const lastEntry = record.shifts[record.shifts.length - 1];
+-                    if (lastEntry && !lastEntry.checkOut) {
+-                        lastEntry.missed = true;
+-                    }
++        };
++        const openShifts = await Attendance.find(filter).session(session);
++        for (const candidate of openShifts) {
++            const close = async (activeSession) => {
++                // Re-read after acquiring the employee write lock; a scan may have won.
++                const record = await Attendance.findOne({ ...filter, _id: candidate._id }).session(activeSession);
++                if (!record) return;
++                const start = new Date(record.checkIn);
++                const end = new Date(start.getTime() + 20 * 60 * 60 * 1000);
++                const endWorkDay = getPKTDateString(new Date(end.getTime() - 6 * 60 * 60 * 1000));
++                const boundary = new Date(endWorkDay + 'T06:00:00.000+05:00');
++                const finishSession = (attendance, checkIn, checkOut) => {
++                    const duration = Math.max(0, Math.floor((checkOut - checkIn) / 60000));
++                    const checkInSource = checkIn > start ? 'boundary' : record.checkInSource;
++                    const checkOutSource = +checkOut === +end ? 'automatic' : 'boundary';
++                    const entry = { checkIn, checkOut, duration, missed: false,
++                        checkInSource, checkOutSource, sessionStart: start };
++                    if (!attendance.shifts) attendance.shifts = [];
++                    const last = attendance.shifts[attendance.shifts.length - 1];
++                    if (last && !last.checkOut && !last.missed) Object.assign(last, entry);
++                    else attendance.shifts.push(entry);
++                    attendance.checkOut = checkOut;
++                    attendance.checkOutSource = checkOutSource;
++                    attendance.duration = (attendance.duration || 0) + duration;
++                    attendance.status = 'Present';
++                    attendance.isCheckingOut = false;
++                };
++                if (start < boundary) {
++                    let nextDay = await Attendance.findOne({
++                        userId: record.userId, adminId: record.adminId, date: endWorkDay
++                    }).session(activeSession);
++                    if (!nextDay) nextDay = new Attendance({
++                        userId: record.userId, adminId: record.adminId, date: endWorkDay, shifts: []
++                    });
++                    finishSession(record, start, boundary);
++                    nextDay.checkIn = boundary;
++                    nextDay.checkInSource = 'boundary';
++                    finishSession(nextDay, boundary, end);
++                    await record.save({ session: activeSession });
++                    await nextDay.save({ session: activeSession });
++                } else {
++                    finishSession(record, start, end);
++                    await record.save({ session: activeSession });
+                 }
+-
+-                if (!record.shifts || record.shifts.length === 0) {
+-                    record.shifts = [{ checkIn: record.checkIn, checkOut: null, duration: 0, missed: true }];
+-                }
+-                // Keep the original date and leave checkout missing.
+-                record.isCheckingOut = false;
+-                await record.save();
+-            }
++            };
++            if (session) await close(session);
++            else await withAttendanceTransaction(candidate, close);
+         }
+     } catch (error) {
++        // Let an enclosing scan transaction abort and retry transient conflicts.
++        if (session) throw error;
+         console.error('[Cron Error] Failed to run auto checkout:', error);
++        throw error;
+     }
+ };
+ 
+@@ -429,7 +454,7 @@ const autoGenerateAndSendPayroll = async (cycle, monthOffset = 0) => {
+ 
+ // Schedule to run every 5 minutes for auto-checkout
+ cron.schedule('*/5 * * * *', () => {
+-    runAutoCheckOut();
++    runAutoCheckOut().catch(error => console.error('[Cron Error]', error));
+ }, {
+     scheduled: true,
+     timezone: "Asia/Karachi"
+@@ -461,4 +486,4 @@ cron.schedule('0 6 16 * *', () => {
+     timezone: "Asia/Karachi"
+ });
+ 
+-module.exports = { sendDailyReport, runAutoCheckOut, autoGenerateAndSendPayroll };
++module.exports = { sendDailyReport, runAutoCheckOut, autoGenerateAndSendPayroll, withAttendanceTransaction };
+diff --git a/backend/scripts/attendance-boundary.test.cjs b/backend/scripts/attendance-boundary.test.cjs
+new file mode 100644
+--- /dev/null
++++ b/backend/scripts/attendance-boundary.test.cjs
+@@ -0,0 +1,351 @@
++const test = require('node:test');
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const path = require('node:path');
++const vm = require('node:vm');
++const { createRequire } = require('node:module');
++const mongoose = require('mongoose');
++const runtime = process.env.ATTENDANCE_TEST_TOOLS
++    ? path.join(process.env.ATTENDANCE_TEST_TOOLS, 'node_modules/mongodb-memory-server')
++    : 'mongodb-memory-server';
++const { MongoMemoryReplSet } = require(runtime);
++const Attendance = require('../models/Attendance');
++const User = require('../models/User');
++
++// This suite uses a disposable local replica set, never .env or the application's database.
++const employee = new mongoose.Types.ObjectId('000000000000000000000001');
++const tenant = new mongoose.Types.ObjectId('000000000000000000000002');
++const scope = { userId: employee, adminId: tenant };
++const time = value => new Date('2026-10-' + value + '+05:00');
++let database;
++test.before(async () => {
++    database = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
++    await mongoose.connect(database.getUri(), { dbName: 'attendance_boundary_tests' });
++    await Promise.all([Attendance.init(), User.init()]);
++}, { timeout: 300000 });
++test.after(async () => {
++    await mongoose.disconnect();
++    if (database) await database.stop();
++});
++test.beforeEach(async () => {
++    await Attendance.deleteMany({});
++    await User.deleteMany({});
++    await User.create({ _id: employee, adminId: tenant, employeeId: 'NIGHT-1', name: 'Night staff',
++        password: 'test-only', department: 'Test', joinDate: '2026-10-10', fingerprintTemplate: Buffer.alloc(400).toString('base64') });
++});
++
++function fixture(initial = '11T02:00:00') {
++    let now = time(initial);
++    const errors = [];
++    class Clock extends Date {
++        constructor(...args) { return new Date(...(args.length ? args : [now])); }
++        static now() { return +now; }
++    }
++    let cron;
++    function load(relative) {
++        const filename = path.resolve(__dirname, '..', relative);
++        const realRequire = createRequire(filename);
++        const module = { exports: {} };
++        vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
++            module, exports: module.exports, Date: Clock, Buffer, __dirname: path.dirname(filename),
++            process: { env: { HRMS_KIOSK_ADMIN_ID: String(tenant) } },
++            console: { log() {}, error(...args) { errors.push(args); if (process.env.ATTENDANCE_TEST_DEBUG) console.error(...args); } },
++            require(name) {
++                if (name === 'node-cron') return { schedule() {} };
++                if (name === 'exceljs' || name === 'nodemailer') return {};
++                if (name === '../utils/reportCron') return cron;
++                return realRequire(name);
++            }
++        }, { filename });
++        return module.exports;
++    }
++    cron = load('utils/reportCron.js');
++    const handler = () => load('routes/attendanceFingerprint.routes.js').stack
++        .find(layer => layer.route?.path === '/fingerprint-checkin').route.stack.at(-1).handle;
++    const first = handler(), second = handler(); // independent Node-process state, same real database
++    let serial = 0;
++    return {
++        cron, errors, at(value) { now = time(value); },
++        controller() { return load('controllers/attendanceController.js'); },
++        async scan(body = {}, otherProcess = false) {
++            const response = { code: 200, status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } };
++            await (otherProcess ? second : first)({ body: {
++                userId: String(employee), clientId: 'test-client-' + String(++serial).padStart(12, '0'), ...body
++            } }, response);
++            return { code: response.code, ...response.body };
++        },
++        async expire() { await cron.runAutoCheckOut(scope, now); },
++        async rows() { return Attendance.find(scope).sort({ date: 1 }).lean(); }
++    };
++}
++const total = rows => rows.reduce((sum, row) => sum + row.duration, 0);
++function sources(rows) {
++    assert.ok(rows.every(row => row.status === 'Present' && row.shifts.every(shift => !shift.missed)));
++    assert.equal(rows[0].shifts.at(-1).checkOutSource, 'boundary');
++    assert.equal(rows[1].shifts.at(-1).checkInSource, 'boundary');
++}
++
++for (const offline of [false, true]) {
++    test((offline ? 'offline' : 'online') + ': 02:00 IN / 15:00 OUT allocates 4h + 9h without synthetic scans', async () => {
++        const f = fixture();
++        if (offline) f.at('12T18:00:00');
++        const input = offline ? { offline: true, scannedAt: time('11T02:00:00').toISOString() } : {};
++        assert.equal((await f.scan(input)).action, 'checkin');
++        if (!offline) f.at('11T15:00:00');
++        const output = offline ? { offline: true, scannedAt: time('11T15:00:00').toISOString() } : {};
++        const result = await f.scan(output);
++        assert.equal(result.action, 'checkout');
++        assert.equal(result.workedMinutes, 780);
++        const rows = await f.rows();
++        assert.deepEqual(rows.map(row => [row.date, row.duration]), [['2026-10-10', 240], ['2026-10-11', 540]]);
++        assert.equal(rows.reduce((n, row) => n + row.clientIds.length, 0), 2);
++        sources(rows);
++        assert.equal(rows[1].checkOutSource, 'fingerprint');
++    });
++}
++
++test('cron at 06:00 leaves a 12-hour overnight shift open', async () => {
++    const f = fixture('10T18:00:00'); await f.scan(); f.at('11T06:00:00'); await f.expire();
++    const rows = await f.rows();
++    assert.equal(rows.length, 1); assert.equal(rows[0].checkOut, null);
++    assert.equal(rows[0].shifts[0].missed, false); assert.equal(rows[0].duration, 0);
++});
++
++for (const checkout of ['11T05:59:59', '11T06:00:00', '11T06:00:01']) {
++    test('night checkout at ' + checkout + ' stays a checkout', async () => {
++        const f = fixture('10T18:00:00'); await f.scan(); f.at(checkout);
++        assert.equal((await f.scan()).action, 'checkout');
++        const rows = await f.rows();
++        assert.equal(total(rows), Math.floor((time(checkout) - time('10T18:00:00')) / 60000));
++        assert.ok(rows.every(row => row.checkOut && row.shifts.every(shift => !shift.missed)));
++    });
++}
++
++for (const cutoff of ['11T14:00:00', '11T17:00:00']) {
++    test('20-hour automatic closure is exact and idempotent when cron runs at ' + cutoff, async () => {
++        const f = fixture('10T18:00:00'); await f.scan(); f.at(cutoff); await f.expire(); await f.expire();
++        const rows = await f.rows();
++        assert.deepEqual(rows.map(row => row.duration), [720, 480]);
++        assert.equal(+rows[1].checkOut, +time('11T14:00:00'));
++        assert.equal(rows[1].checkOutSource, 'automatic');
++        assert.equal(rows[1].shifts[0].checkOutSource, 'automatic');
++        assert.equal(rows.reduce((n, row) => n + (row.clientIds?.length || 0), 0), 1);
++        sources(rows);
++    });
++}
++
++test('20-hour auto-closure without crossing 06:00 uses one workday', async () => {
++    const f = fixture('10T07:00:00'); await f.scan(); f.at('11T03:00:00'); await f.expire();
++    const rows = await f.rows(); assert.equal(rows.length, 1); assert.equal(total(rows), 1200);
++    assert.equal(rows[0].checkOutSource, 'automatic'); assert.equal(+rows[0].checkOut, +time('11T03:00:00'));
++});
++
++test('a scan at the 20-hour cutoff cannot change the automatic OUT into a fingerprint OUT', async () => {
++    const f = fixture('10T18:00:00'); await f.scan(); f.at('11T14:00:00');
++    assert.equal((await f.scan()).action, 'too_soon');
++    assert.equal((await f.rows())[1].checkOutSource, 'automatic');
++});
++
++test('30-minute minimum is preserved across 06:00', async () => {
++    const f = fixture('11T05:50:00'); await f.scan(); f.at('11T06:00:00');
++    assert.equal((await f.scan()).action, 'too_soon');
++    assert.equal((await f.rows()).length, 1); f.at('11T06:20:00');
++    assert.equal((await f.scan()).action, 'checkout');
++    assert.deepEqual((await f.rows()).map(row => row.duration), [10, 20]);
++});
++
++test('10-minute recheck-in cooldown survives the workday boundary', async () => {
++    const f = fixture(); await f.scan(); f.at('11T05:59:00'); await f.scan(); f.at('11T06:01:00');
++    const result = await f.scan(); assert.equal(result.action, 'too_soon'); assert.equal(result.retryAfterSeconds, 480);
++    assert.equal((await f.rows()).length, 1); f.at('11T06:09:00');
++    assert.equal((await f.scan()).action, 'checkin');
++});
++
++test('completed sessions and markedByFace survive a later cross-day session', async () => {
++    const f = fixture(); await f.scan(); f.at('11T03:00:00'); await f.scan(); f.at('11T03:10:00'); await f.scan();
++    await Attendance.updateOne(scope, { $set: { markedByFace: true } });
++    f.at('11T15:00:00'); assert.equal((await f.scan()).action, 'checkout');
++    const rows = await f.rows(); assert.deepEqual(rows.map(row => row.duration), [230, 540]);
++    assert.equal(rows[0].shifts.length, 2); assert.equal(rows[0].shifts[0].duration, 60);
++    assert.equal(rows[0].markedByFace, true);
++});
++
++for (const actualOut of ['11T05:00:00', '11T15:00:00']) {
++    test('delayed offline OUT at ' + actualOut + ' replaces prior cron auto-closure, and retries are duplicates', async () => {
++        const f = fixture(); await f.scan(); f.at('11T22:00:00'); await f.expire();
++        assert.equal(total(await f.rows()), 1200); f.at('12T18:00:00');
++        const replay = { offline: true, scannedAt: time(actualOut).toISOString(), clientId: 'offline-checkout-retry-12345' };
++        assert.equal((await f.scan(replay)).action, 'checkout');
++        const rows = await f.rows();
++        assert.equal(total(rows), (time(actualOut) - time('11T02:00:00')) / 60000);
++        assert.equal(rows.at(-1).checkOutSource, 'fingerprint');
++        assert.equal(rows.length, actualOut.includes('05:') ? 1 : 2);
++        assert.equal((await f.scan(replay)).action, 'duplicate');
++        assert.deepEqual(await f.rows(), rows);
++    });
++}
++
++test('out-of-order offline scan cannot overwrite a newer real session', async () => {
++    const f = fixture(); await f.scan(); f.at('11T15:00:00'); await f.scan(); f.at('11T15:10:00'); await f.scan();
++    const before = await f.rows(); f.at('12T18:00:00');
++    const result = await f.scan({ offline: true, scannedAt: time('11T14:00:00').toISOString() });
++    assert.equal(result.code, 409); assert.equal(result.action, 'rejected'); assert.deepEqual(await f.rows(), before);
++});
++
++function failSaveOn(date) {
++    const save = Attendance.prototype.save;
++    Attendance.prototype.save = async function (...args) {
++        if (this.date === date) throw new Error('Injected failure between workday saves');
++        return save.apply(this, args);
++    };
++    return () => { Attendance.prototype.save = save; };
++}
++
++test('failure between manual split writes rolls back both days and clientId; retry succeeds', async () => {
++    const f = fixture(); await f.scan(); const before = await f.rows(); f.at('11T15:00:00');
++    const restore = failSaveOn('2026-10-11');
++    const body = { clientId: 'manual-failure-retry-12345' };
++    try { assert.equal((await f.scan(body)).code, 500); } finally { restore(); }
++    assert.deepEqual(await f.rows(), before);
++    assert.equal((await f.scan(body)).action, 'checkout');
++    assert.equal((await f.scan(body)).action, 'duplicate'); assert.equal(total(await f.rows()), 780);
++});
++
++test('failure between automatic split writes rolls back; next cron run recovers', async () => {
++    const f = fixture(); await f.scan(); const before = await f.rows(); f.at('11T22:00:00');
++    const restore = failSaveOn('2026-10-11');
++    try { await assert.rejects(f.expire(), /Injected failure/); } finally { restore(); }
++    assert.deepEqual(await f.rows(), before); await f.expire(); assert.equal(total(await f.rows()), 1200);
++});
++
++test('commit failure cannot send a successful response or lose the queued scan', async () => {
++    const f = fixture(); await f.scan(); const before = await f.rows(); f.at('11T15:00:00');
++    const transaction = Attendance.db.transaction;
++    Attendance.db.transaction = function (work, options) {
++        return transaction.call(this, async session => { await work(session); throw new Error('Injected before commit'); }, options);
++    };
++    try { assert.equal((await f.scan()).code, 500); } finally { Attendance.db.transaction = transaction; }
++    assert.deepEqual(await f.rows(), before);
++});
++
++test('concurrent duplicate checkouts from independent processes commit once', async () => {
++    const f = fixture(); await f.scan(); f.at('11T15:00:00');
++    const results = await Promise.all([f.scan({ clientId: 'concurrent-same-scan-12345' }), f.scan({ clientId: 'concurrent-same-scan-12345' }, true)]);
++    assert.deepEqual(results.map(result => result.action).sort(), ['checkout', 'duplicate']);
++    assert.equal(total(await f.rows()), 780);
++});
++
++test('concurrent distinct scans cannot create a second open shift', async () => {
++    const f = fixture();
++    const results = await Promise.all([f.scan(), f.scan({}, true)]);
++    assert.deepEqual(results.map(result => result.action).sort(), ['checkin', 'too_soon']);
++    const rows = await f.rows(); assert.equal(rows.length, 1); assert.equal(rows[0].shifts.length, 1);
++});
++
++test('concurrent first scans on either side of 06:00 cannot create two open workdays', async () => {
++    const before = fixture('11T05:59:59'), after = fixture('11T06:00:00');
++    const results = await Promise.all([before.scan({ clientId: 'before-boundary-scan-12345' }), after.scan({ clientId: 'after-boundary-scan-12345' })]);
++    assert.equal(results.filter(result => result.action === 'checkin').length, 1);
++    const rows = await before.rows(); assert.equal(rows.filter(row => !row.checkOut).length, 1);
++});
++
++test('concurrent cron and delayed offline checkout produce the real checkout exactly once', async () => {
++    const cron = fixture('10T18:00:00'); await cron.scan(); cron.at('11T14:00:00');
++    const kiosk = fixture('12T18:00:00');
++    const [, result] = await Promise.all([cron.expire(), kiosk.scan({ offline: true,
++        scannedAt: time('11T06:01:00').toISOString(), clientId: 'cron-scan-race-12345678' })]);
++    assert.equal(result.action, 'checkout'); const rows = await cron.rows();
++    assert.equal(total(rows), 721); assert.equal(rows.at(-1).checkOutSource, 'fingerprint');
++});
++
++test('two cron processes cannot double-count an expired shift', async () => {
++    const first = fixture(); await first.scan(); first.at('11T22:00:00'); const second = fixture('11T22:00:00');
++    await Promise.all([first.expire(), second.expire()]); const rows = await first.rows();
++    assert.equal(total(rows), 1200); assert.equal(rows.length, 2); assert.ok(rows.every(row => row.shifts.length === 1));
++});
++
++test('automatic checkout remains tenant-scoped', async () => {
++    const f = fixture(); await f.scan(); f.at('11T22:00:00');
++    await f.cron.runAutoCheckOut({ userId: employee, adminId: new mongoose.Types.ObjectId() }, time('11T22:00:00'));
++    assert.equal((await f.rows())[0].checkOut, null);
++});
++
++test('cron grace period protects records updated during synchronization', async () => {
++    const f = fixture(); await f.scan(); f.at('11T22:00:00');
++    await Attendance.collection.updateMany({}, { $set: { updatedAt: time('11T21:59:00') } });
++    await f.cron.runAutoCheckOut(scope); assert.equal((await f.rows())[0].checkOut, null);
++    await Attendance.collection.updateMany({}, { $set: { updatedAt: time('11T21:49:00') } });
++    await f.cron.runAutoCheckOut(scope); assert.equal(total(await f.rows()), 1200);
++});
++
++test('stale attendance saves cannot overwrite a committed fingerprint transaction', async () => {
++    const f = fixture(); await f.scan(); const stale = await Attendance.findOne(scope);
++    f.at('11T15:00:00'); await f.scan(); stale.status = 'Absent';
++    await assert.rejects(stale.save(), error => error.name === 'VersionError');
++    assert.equal(total(await f.rows()), 780);
++});
++
++
++test('earlier missed sessions do not block automatic closure of a later open session', async () => {
++    const f = fixture(); await f.scan();
++    await Attendance.updateOne(scope, { $push: { shifts: { $each: [{ checkIn: time('11T00:00:00'), checkOut: null, duration: 0, missed: true }], $position: 0 } } });
++    f.at('11T22:00:00'); await f.expire(); const rows = await f.rows();
++    assert.equal(total(rows), 1200); assert.equal(rows[0].shifts[0].missed, true);
++    assert.equal(rows[0].shifts[1].missed, false); assert.equal(rows[0].status, 'Present');
++});
++
++test('legacy open attendance without shifts still closes after 20 hours', async () => {
++    const f = fixture();
++    await Attendance.create({ ...scope, date: '2026-10-10', checkIn: time('11T02:00:00'), checkOut: null, shifts: [] });
++    f.at('11T22:00:00'); await f.expire();
++    const rows = await f.rows(); assert.equal(total(rows), 1200); assert.equal(rows.at(-1).checkOutSource, 'automatic');
++});
++
++test('expired offline scans and invalid client ids are rejected without writes', async () => {
++    const f = fixture('19T12:00:00');
++    assert.equal((await f.scan({ offline: true, scannedAt: time('01T02:00:00').toISOString() })).code, 400);
++    assert.equal((await f.scan({ clientId: 'bad' })).code, 400);
++    assert.equal((await f.rows()).length, 0);
++});
++
++test('a future offline scan over the clock tolerance is rejected', async () => {
++    const f = fixture();
++    assert.equal((await f.scan({ offline: true, scannedAt: time('11T03:00:00').toISOString() })).code, 400);
++    assert.equal((await f.rows()).length, 0);
++});
++
++
++test('too-early offline OUT does not undo an already committed automatic closure', async () => {
++    const f = fixture(); await f.scan(); f.at('11T22:00:00'); await f.expire(); const before = await f.rows();
++    f.at('12T18:00:00');
++    const result = await f.scan({ offline: true, scannedAt: time('11T02:10:00').toISOString() });
++    assert.equal(result.action, 'too_soon'); assert.equal(result.retryAfterSeconds, 1200);
++    assert.deepEqual(await f.rows(), before);
++});
++
++test('offline correction failure rolls back the automatic allocation and can be replayed safely', async () => {
++    const f = fixture(); await f.scan(); f.at('11T22:00:00'); await f.expire(); const before = await f.rows();
++    f.at('12T18:00:00'); const restore = failSaveOn('2026-10-11');
++    const replay = { offline: true, scannedAt: time('11T15:00:00').toISOString(), clientId: 'offline-rollback-retry-12345' };
++    try { assert.equal((await f.scan(replay)).code, 500); } finally { restore(); }
++    assert.deepEqual(await f.rows(), before);
++    assert.equal((await f.scan(replay)).action, 'checkout'); assert.equal(total(await f.rows()), 780);
++});
++
++
++test('status and history reconciliation keep a night shift open after 06:00', async () => {
++    const f = fixture('10T18:00:00'); await f.scan(); f.at('11T06:01:00');
++    const controller = f.controller(); await controller.reconcileAttendance(employee);
++    const res = { json(body) { this.body = body; }, status() { return this; } };
++    await controller.getAttendanceStatus({ user: { _id: employee } }, res);
++    assert.equal(+res.body.checkIn, +time('10T18:00:00')); assert.equal(res.body.checkOut, null);
++    assert.equal((await f.rows()).length, 1); assert.equal((await f.rows())[0].status, 'Present');
++});
++
++test('expired shifts no longer appear as open in the status endpoint', async () => {
++    const f = fixture('10T18:00:00'); await f.scan(); f.at('11T14:01:00');
++    await Attendance.collection.updateMany({}, { $set: { updatedAt: time('11T13:00:00') } });
++    const res = { json(body) { this.body = body; }, status() { return this; } };
++    await f.controller().getAttendanceStatus({ user: { _id: employee } }, res);
++    assert.equal(+res.body.checkOut, +time('11T14:00:00')); assert.equal(res.body.checkOutSource, 'automatic');
++});

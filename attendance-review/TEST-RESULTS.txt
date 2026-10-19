@@ -1,0 +1,34 @@
+Observed local test results ? 2026-10-19
+
+Integration command:
+  ATTENDANCE_TEST_TOOLS=<temporary runtime directory>
+  ATTENDANCE_TEST_DEBUG=1
+  node --test backend/scripts/attendance-boundary.test.cjs
+
+Node.js v24.18.0; local MongoDB 7.0.14 replica set; real Mongoose schemas and MongoDB writes.
+  tests 35
+  pass 35
+  fail 0
+  cancelled 0
+  skipped 0
+  duration_ms 8088.5958
+  process exit code 0
+
+Coverage includes online/offline 02:00?15:00 allocation, 18:00?06:01 checkout, 05:59:59/06:00:00/06:00:01, exact and late-processed 20-hour automatic OUT, 30-minute checkout, cross-workday 10-minute cooldown, multi-shift totals, delayed offline correction after cron, duplicate clientId retries, out-of-order rejection, rollback between daily saves, rollback before commit, retry recovery, concurrent independent handlers, concurrent cron/scan and cron/cron, tenant scope, sync grace, stale document writes, legacy empty shifts, earlier missed sessions, timestamp validation, history reconciliation, and timer status.
+
+The deliberately injected save/commit errors in debug output are expected and asserted. The disposable MongoDB test runtime printed a socket ECONNRESET during shutdown; the test runner still reported all 35 tests passing and exited 0. This was not a production connection.
+
+Existing regression command:
+  node --test backend/scripts/attendance-dates.test.cjs backend/scripts/attendance-export.test.cjs backend/scripts/deleted-users.test.cjs backend/scripts/biometrics.test.cjs backend/scripts/employee-list.test.cjs
+  tests 32
+  pass 32
+  fail 0
+  cancelled 0
+  skipped 0
+  duration_ms 12209.549
+  process exit code 0
+
+Combined observed results: 67 passed, 0 failed.
+JavaScript syntax checks passed for the three production files and the new integration test.
+git diff --check passed. Git printed its existing LF-to-CRLF conversion warnings; files were not normalized.
+No deployment was performed. Live system behavior and topology were not inspected.
