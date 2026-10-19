@@ -595,6 +595,308 @@
  
  
  
+// 'use strict';
+ 
+// const express = require('express');
+// const crypto = require('node:crypto');
+// const fs = require('node:fs');
+// const path = require('node:path');
+// const { formatInTimeZone } = require('date-fns-tz');
+// const Employee = require('../models/User');
+// const Attendance = require('../models/Attendance');
+// const { runAutoCheckOut } = require('../utils/reportCron');
+// const router = express.Router();
+ 
+// // Optional private config created by setup-fingerprint.cjs in this same directory.
+// // Environment settings, when present, override the corresponding file setting.
+// // No dotenv dependency and no changes to app.js/server.js are required here.
+// let fileConfig = {};
+// try {
+//   fileConfig = JSON.parse(fs.readFileSync(path.join(__dirname, 'fingerprint-kiosk.config.json'), 'utf8'));
+// } catch (error) {
+//   if (error.code !== 'ENOENT') console.error('[Fingerprint] Private configuration could not be read.');
+// }
+// const config = {
+//   kioskToken: process.env.HRMS_KIOSK_TOKEN ?? fileConfig.kioskToken,
+//   enrollToken: process.env.HRMS_ENROLL_TOKEN ?? fileConfig.enrollToken,
+//   adminId: process.env.HRMS_KIOSK_ADMIN_ID ?? fileConfig.adminId
+// };
+// const validId = value => typeof value === 'string' && /^[a-f\d]{24}$/i.test(value);
+// const validToken = value => typeof value === 'string' && /^[\x21-\x7e]{32,512}$/.test(value);
+// const digest = value => crypto.createHash('sha256').update(value).digest();
+// const sameToken = (a, b) => crypto.timingSafeEqual(digest(a), digest(b));
+// const tenantId = validId(config.adminId) ? config.adminId.toLowerCase() : null;
+ 
+// function authenticate(kind) {
+//   return (req, res, next) => {
+//     res.set('Cache-Control', 'no-store');
+//     const expected = kind === 'enroll' ? config.enrollToken : config.kioskToken;
+//     // The enrollment key must be separate from the kiosk key.
+//     if (!tenantId || !validToken(expected) ||
+//         (kind === 'enroll' && (!validToken(config.kioskToken) || sameToken(expected, config.kioskToken)))) {
+//       return res.status(503).json({ action: 'unavailable', message: 'نظام کی ترتیب مکمل نہیں ہے۔ انتظامیہ سے رابطہ کریں۔' });
+//     }
+//     const header = req.headers.authorization;
+//     const supplied = typeof header === 'string' && header.startsWith('Bearer ') ? header.slice(7) : '';
+//     if (!validToken(supplied) || !sameToken(expected, supplied)) {
+//       return res.status(401).json({ action: 'denied', message: 'اس آلے کو اجازت حاصل نہیں ہے۔ انتظامیہ سے رابطہ کریں۔' });
+//     }
+//     next();
+//   };
+// }
+// const kioskAuth = authenticate('kiosk');
+// const enrollAuth = authenticate('enroll');
+// const validTemplate = value => typeof value === 'string' && value.length === 536 &&
+//   /^[A-Za-z0-9+/]+={2}$/.test(value) && Buffer.from(value, 'base64').length === 400 &&
+//   Buffer.from(value, 'base64').toString('base64') === value;
+// const denied = res => res.status(404).json({ action: 'denied', message: 'ملازم دستیاب نہیں ہے۔ انتظامیہ سے رابطہ کریں۔' });
+ 
+// // ── Offline kiosk support ──────────────────────────────────────────────────
+// // While the kiosk has no internet it saves scans locally and replays them later with
+// //   { userId, clientId, offline: true, scannedAt: "<ISO UTC time of the real scan>" }
+// // scannedAt is trusted ONLY when offline === true and only inside the limits below.
+// // clientId is unique per scan; a scan that is already saved is answered with
+// // action 'duplicate' instead of being recorded twice.
+// const validClientId = value => typeof value === 'string' && /^[A-Za-z0-9-]{16,64}$/.test(value);
+// const OFFLINE_MAX_AGE_MS = (Number(process.env.HRMS_OFFLINE_MAX_AGE_HOURS) > 0
+//   ? Number(process.env.HRMS_OFFLINE_MAX_AGE_HOURS) : 168) * 60 * 60 * 1000; // default 7 days
+// const CLOCK_AHEAD_TOLERANCE_MS = 10 * 60 * 1000;
+// function resolveScanTime(body, serverNow) {
+//   if (body.offline !== true) return { at: serverNow };
+//   const at = typeof body.scannedAt === 'string' ? new Date(body.scannedAt) : null;
+//   if (!at || Number.isNaN(at.getTime())) return { error: 'scannedAt is missing or not a valid time.' };
+//   if (at > serverNow) {
+//     // A kiosk clock a few minutes ahead is tolerated (scan is stamped "now"); more is refused.
+//     return at - serverNow <= CLOCK_AHEAD_TOLERANCE_MS
+//       ? { at: serverNow } : { error: 'scannedAt is in the future.' };
+//   }
+//   if (serverNow - at > OFFLINE_MAX_AGE_MS) return { error: 'scannedAt is too old to accept.' };
+//   return { at };
+// }
+ 
+// router.get('/fingerprint-templates', kioskAuth, async (req, res) => {
+//   try {
+//     const employees = await Employee.find(
+//       { adminId: tenantId, status: { $ne: 'Deleted' }, fingerprintTemplate: { $type: 'string', $ne: '' } },
+//       { name: 1, fingerprintTemplate: 1, status: 1 }
+//     );
+//     // Keep invalid historical data out of the scanner; it must be re-enrolled by an admin.
+//     res.json({ employees: employees.filter(employee => validTemplate(employee.fingerprintTemplate)) });
+//   } catch (error) {
+//     console.error('[Fingerprint templates]', error);
+//     res.status(500).json({ message: 'معلومات حاصل نہیں ہو سکیں۔ انتظامیہ سے رابطہ کریں۔' });
+//   }
+// });
+ 
+// // This credential belongs ONLY in the administrator's enrollment tool, never in the kiosk.
+// router.post('/fingerprint-enroll', enrollAuth, async (req, res) => {
+//   try {
+//     const { userId, template } = req.body || {};
+//     if (!validId(userId) || !validTemplate(template)) {
+//       return res.status(400).json({ message: 'ملازم یا فنگر پرنٹ کی معلومات درست نہیں ہیں۔' });
+//     }
+//     const duplicate = await Employee.findOne({
+//       adminId: tenantId, _id: { $ne: userId }, fingerprintTemplate: template
+//     });
+//     if (duplicate) {
+//       return res.status(409).json({ message: 'یہ فنگر پرنٹ کسی دوسرے ملازم کے لیے درج ہے۔' });
+//     }
+//     const employee = await Employee.findOneAndUpdate(
+//       { _id: userId, adminId: tenantId, status: { $ne: 'Deleted' } },
+//       { $set: { fingerprintTemplate: template } },
+//       { new: true, runValidators: true }
+//     );
+//     if (!employee) return denied(res);
+//     res.json({ message: 'فنگر پرنٹ درج ہو گیا ہے۔' });
+//   } catch (error) {
+//     console.error('[Fingerprint enrollment]', error);
+//     res.status(500).json({ message: 'فنگر پرنٹ درج نہیں ہو سکا۔ انتظامیہ سے رابطہ کریں۔' });
+//   }
+// });
+ 
+// router.post('/fingerprint-remove', enrollAuth, async (req, res) => {
+//   try {
+//     const { userId } = req.body || {};
+//     if (!validId(userId)) {
+//       return res.status(400).json({ message: 'Employee ki maloomat drust nahi hain.' });
+//     }
+//     const employee = await Employee.findOneAndUpdate(
+//       { _id: userId, adminId: tenantId, status: { $ne: 'Deleted' } },
+//       { $set: { fingerprintTemplate: null } },
+//       { new: true }
+//     );
+//     if (!employee) return denied(res);
+//     res.json({ message: 'Fingerprint hata diya gaya hai.' });
+//   } catch (error) {
+//     console.error('[Fingerprint removal]', error);
+//     res.status(500).json({ message: 'فنگر پرنٹ درج نہیں ہو سکا۔ انتظامیہ سے رابطہ کریں۔' });
+//   }
+// });
+ 
+// // Prevent overlapping fingerprint requests within this Node process.
+// // This is NOT a distributed lock and does not coordinate with the face controller.
+// const inFlight = new Set();
+// router.post('/fingerprint-checkin', kioskAuth, async (req, res) => {
+//   let lockKey;
+//   try {
+//     const { userId, clientId } = req.body || {};
+//     const isOffline = (req.body || {}).offline === true;
+//     if (!validId(userId)) return res.status(400).json({ message: 'ملازم کی معلومات درست نہیں ہیں۔' });
+//     if (clientId !== undefined && !validClientId(clientId)) {
+//       return res.status(400).json({ action: 'rejected', message: 'clientId is not valid.' });
+//     }
+//     const id = userId.toLowerCase();
+//     if (inFlight.has(id)) {
+//       return res.status(429).json({ action: 'busy', message: 'حاضری درج ہو رہی ہے۔ کچھ دیر انتظار کریں۔' });
+//     }
+//     inFlight.add(id);
+//     lockKey = id;
+//     const user = await Employee.findOne({ _id: id, adminId: tenantId, status: { $ne: 'Deleted' } });
+//     if (!user) return denied(res);
+//     if (!validTemplate(user.fingerprintTemplate)) {
+//       return res.status(400).json({ message: 'فنگر پرنٹ درج کروانے کے لیے انتظامیہ سے رابطہ کریں۔' });
+//     }
+ 
+//     // Live scans use the server clock. A replayed offline scan (offline === true) uses the time
+//     // the finger was really scanned, after the sanity checks in resolveScanTime.
+//     const scan = resolveScanTime(req.body || {}, new Date());
+//     if (scan.error) return res.status(400).json({ action: 'rejected', message: scan.error });
+//     const now = scan.at;
+//     const getWorkDay = (date) => {
+//       const pktHour = parseInt(formatInTimeZone(date, 'Asia/Karachi', 'HH'), 10);
+//       if (pktHour < 6) {
+//         const prev = new Date(date);
+//         prev.setTime(prev.getTime() - (6 * 60 * 60 * 1000));
+//         return formatInTimeZone(prev, 'Asia/Karachi', 'yyyy-MM-dd');
+//       }
+//       return formatInTimeZone(date, 'Asia/Karachi', 'yyyy-MM-dd');
+//     };
+//     const today = getWorkDay(now);
+//     const scope = { userId: id, adminId: user.adminId };
+//     // Same scan sent again (reply was lost, or queue replay after a live attempt): do nothing.
+//     if (clientId && await Attendance.exists({ ...scope, clientIds: clientId })) {
+//       return res.json({ action: 'duplicate', employeeName: user.name, message: 'Scan was already recorded.' });
+//     }
+//     const stampScan = record => {
+//       if (clientId) record.clientIds = [...(record.clientIds || []), clientId];
+//     };
+//     const minutesBetween = (start, end) => Math.max(0, Math.floor((end - start) / 60000));
+//     const finishSession = (record, start, end) => {
+//       const minutes = minutesBetween(start, end);
+//       if (!record.shifts) record.shifts = [];
+//       const last = record.shifts[record.shifts.length - 1];
+//       if (last && !last.checkOut && !last.missed) {
+//         last.checkIn = start;
+//         last.checkOut = end;
+//         last.duration = minutes;
+//         last.missed = false;
+//       } else {
+//         record.shifts.push({ checkIn: start, checkOut: end, duration: minutes, missed: false });
+//       }
+//       record.checkOut = end;
+//       record.duration = (record.duration || 0) + minutes;
+//       record.status = 'Present';
+//       // markedByFace is deliberately preserved.
+//     };
+ 
+//     await runAutoCheckOut(scope, isOffline ? now : null);
+//     let open = await Attendance.findOne({ ...scope, checkIn: { $ne: null }, checkOut: null,
+//       $expr: { $ne: [{ $arrayElemAt: ['$shifts.missed', -1] }, true] }
+//     }).sort({ checkIn: -1 });
+//     if (open && now - new Date(open.checkIn) > 20 * 60 * 60 * 1000) {
+//       if (!open.shifts) open.shifts = [];
+//       const last = open.shifts[open.shifts.length - 1];
+//       if (last && !last.checkOut) last.missed = true;
+//       else open.shifts.push({ checkIn: open.checkIn, duration: 0, missed: true });
+//       open.status = open.shifts.some(s => s.checkOut && !s.missed) ? 'Present' : 'Absent';
+//       open.checkOut = null; // A missed checkout must not fabricate a punch.
+//       await open.save();
+//       open = null;
+//     }
+ 
+//     if (open) {
+//       const start = new Date(open.checkIn);
+//       const elapsedMinutes = (now - start) / 60000;
+//       if (elapsedMinutes < 30) {
+//         return res.json({
+//           action: 'too_soon', status: 'checked_in', employeeName: user.name,
+//           retryAfterSeconds: Math.max(1, Math.ceil((30 - elapsedMinutes) * 60)),
+//           message: 'روانگی آمد کے کم از کم 30 منٹ بعد درج ہو سکتی ہے۔'
+//         });
+//       }
+//       const startWorkDay = getWorkDay(start);
+//       if (startWorkDay === today) {
+//         finishSession(open, start, now);
+//         stampScan(open);
+//         await open.save();
+//       } else {
+//         const boundary = new Date(`${today}T06:00:00.000+05:00`);
+//         let nextDay = await Attendance.findOne({ ...scope, date: today });
+//         if (!nextDay) nextDay = new Attendance({ ...scope, date: today, status: 'Present', shifts: [] });
+//         finishSession(open, start, boundary);
+//         nextDay.checkIn = boundary;
+//         finishSession(nextDay, boundary, now);
+//         stampScan(nextDay);
+//         await open.validate();
+//         await nextDay.validate();
+//         // Preserves the supplied two-write flow; these saves are not a transaction.
+//         await open.save();
+//         await nextDay.save();
+//       }
+//       return res.json({
+//         action: 'checkout', status: 'checked_out', employeeName: user.name,
+//         workedMinutes: minutesBetween(start, now), serverTime: now.toISOString(),
+//         message: 'آپ کی روانگی درج ہو گئی ہے۔'
+//       });
+//     }
+ 
+//     let attendance = await Attendance.findOne({ ...scope, date: today });
+//     if (attendance?.checkOut && now - new Date(attendance.checkOut) < 600000) {
+//       return res.json({
+//         action: 'too_soon', status: 'checked_out', employeeName: user.name,
+//         retryAfterSeconds: Math.max(1, Math.ceil((600000 - (now - new Date(attendance.checkOut))) / 1000)),
+//         message: 'Already checked out. Please wait 10 minutes before starting your next shift.'
+//       });
+//     }
+//     if (!attendance) attendance = new Attendance({ ...scope, date: today, duration: 0, shifts: [] });
+//     attendance.checkIn = now;
+//     attendance.checkOut = null;
+//     attendance.status = 'Present';
+//     if (!attendance.shifts) attendance.shifts = [];
+//     attendance.shifts.push({ checkIn: now, checkOut: null, duration: 0, missed: false });
+//     stampScan(attendance);
+//     await attendance.save();
+//     return res.status(201).json({
+//       action: 'checkin', status: 'checked_in', employeeName: user.name,
+//       serverTime: now.toISOString(), message: 'آپ کی آمد درج ہو گئی ہے۔'
+//     });
+//   } catch (error) {
+//     console.error('[Fingerprint attendance]', error);
+//     if (error.code === 11000) {
+//       return res.status(409).json({ message: 'حاضری کی تصدیق کے لیے انتظامیہ سے رابطہ کریں۔' });
+//     }
+//     return res.status(500).json({ message: 'حاضری کی تصدیق نہیں ہو سکی۔ انتظامیہ سے رابطہ کریں۔' });
+//   } finally {
+//     if (lockKey) inFlight.delete(lockKey);
+//   }
+// });
+ 
+// module.exports = router;
+
+
+
+
+
+
+
+
+
+
+ 
+ 
+ 
+ 
+ 
 'use strict';
  
 const express = require('express');
