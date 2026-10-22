@@ -1,9 +1,10 @@
 import { API_BASE_URL } from '../../config';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { Calendar, Clock, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { Input } from '../../components/ui/Input';
+import { formatAttendanceDateTime, prepareAttendanceForDisplay } from '../../utils/attendanceDisplay';
 
 const MyAttendance = () => {
     const [attendance, setAttendance] = useState([]);
@@ -36,17 +37,6 @@ const MyAttendance = () => {
         }
     };
 
-    const format12h = (time) => {
-        if (!time) return '--:--';
-        try {
-            const date = new Date(time);
-            if (!isNaN(date.getTime())) {
-                return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-            }
-        } catch (e) { /* fall through */ }
-        return '--:--';
-    };
-
     const getStatusVariant = (status) => {
         switch (status) {
             case 'Present': return 'success';
@@ -60,6 +50,8 @@ const MyAttendance = () => {
     const toggleRow = (id) => {
         setExpandedRows(prev => ({ ...prev, [id]: !prev[id] }));
     };
+
+    const displayAttendance = useMemo(() => prepareAttendanceForDisplay(attendance), [attendance]);
 
     // Determine if a record has multiple shift sessions
     const hasMultipleShifts = (record) => record.shifts && record.shifts.length > 1;
@@ -101,21 +93,21 @@ const MyAttendance = () => {
                                     <tr>
                                         <th className="px-4 py-4 w-8"></th>
                                         <th className="px-4 py-4">Date</th>
-                                        <th className="px-4 py-4">Last Check In</th>
-                                        <th className="px-4 py-4">Last Check Out</th>
+                                        <th className="px-4 py-4">Check In</th>
+                                        <th className="px-4 py-4">Check Out</th>
                                         <th className="px-4 py-4">Total Hours</th>
                                         <th className="px-4 py-4 text-center">Status</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-border/40">
-                                    {attendance.length === 0 ? (
+                                    {displayAttendance.length === 0 ? (
                                         <tr>
                                             <td colSpan="6" className="p-12 text-center text-muted-foreground">
                                                 No records found for this month.
                                             </td>
                                         </tr>
                                     ) : (
-                                        attendance.map((record) => {
+                                        displayAttendance.map((record) => {
                                             const isExpanded = expandedRows[record._id];
                                             const multiShift = hasMultipleShifts(record);
 
@@ -152,10 +144,10 @@ const MyAttendance = () => {
                                                             </div>
                                                         </td>
                                                         <td className="px-4 py-4 text-muted-foreground">
-                                                            {displayCheckIn ? format12h(displayCheckIn) : '--:--'}
+                                                            {displayCheckIn ? formatAttendanceDateTime(displayCheckIn) : '--:--'}
                                                         </td>
                                                         <td className="px-4 py-4 text-muted-foreground">
-                                                            {displayCheckOut ? format12h(displayCheckOut) : (record.checkIn ? <span className="text-amber-500 font-medium">Active</span> : '--:--')}
+                                                            {displayCheckOut ? formatAttendanceDateTime(displayCheckOut) : (record.checkIn ? <span className="text-amber-500 font-medium">Active</span> : '--:--')}
                                                         </td>
                                                         <td className="px-4 py-4 font-semibold">
                                                             {record.duration ? `${Math.floor(record.duration / 60)}h ${record.duration % 60}m` : '--'}
@@ -178,10 +170,10 @@ const MyAttendance = () => {
                                                                 </div>
                                                             </td>
                                                             <td className="px-4 py-2.5 text-xs text-foreground/80">
-                                                                {shift.checkIn ? format12h(shift.checkIn) : '--:--'}
+                                                                {shift.checkIn ? formatAttendanceDateTime(shift.checkIn) : '--:--'}
                                                             </td>
                                                             <td className="px-4 py-2.5 text-xs text-foreground/80">
-                                                                {shift.checkOut ? format12h(shift.checkOut) : <span className="text-amber-500">Active</span>}
+                                                                {shift.checkOut ? formatAttendanceDateTime(shift.checkOut) : <span className="text-amber-500">Active</span>}
                                                             </td>
                                                             <td className="px-4 py-2.5 text-xs text-foreground/60">
                                                                 {shift.duration ? `${Math.floor(shift.duration / 60)}h ${shift.duration % 60}m` : '--'}

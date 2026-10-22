@@ -210,18 +210,58 @@ const sendDailyReport = async (tenantId = null) => {
 
         console.log(`[Report] Raw attendance fetched: ${rawAttendance.length} records for dates [${datesToQuery.join(', ')}]`);
 
-        // Filter records whose checkIn falls inside the window
-        // Absent records (no checkIn) — include if their date falls within the window's date range
-        const allAttendance = rawAttendance.filter(r => {
+        // Select full logical shifts by their original check-in, then join their
+        // midnight/workday-boundary segments for reporting. Payroll still reads
+        // the stored split records and is not changed here.
+        const attendanceInWindow = rawAttendance.filter(r => {
             if (!r.userId) return false;
-            if (r.checkIn) {
-                return r.checkIn >= windowStart && r.checkIn < windowEnd;
-            }
-            // No checkIn (absent) — include if the record date is in our query range
-            return datesToQuery.includes(r.date);
+            return !r.checkIn && datesToQuery.includes(r.date);
         });
 
-        console.log(`[Report] After window filter: ${allAttendance.length} records.`);
+        const reportShiftsByKey = new Map();
+        for (const record of rawAttendance) {
+            if (!record.userId) continue;
+            const shifts = Array.isArray(record.shifts) ? record.shifts : [];
+            if (shifts.length === 0 && record.checkIn) {
+                const start = record.checkIn;
+                if (start < windowStart || start >= windowEnd) continue;
+                const key = `${record.userId._id}:${+start}`;
+                reportShiftsByKey.set(key, {
+                    userId: record.userId, checkIn: start, checkOut: record.checkOut || null,
+                    duration: record.duration || 0, status: record.status || 'Present'
+                });
+                continue;
+            }
+
+            for (const shift of shifts) {
+                const originalStart = shift.sessionStart || shift.checkIn;
+                if (!originalStart || originalStart < windowStart || originalStart >= windowEnd) continue;
+                const key = `${record.userId._id}:${+originalStart}`;
+                let reportShift = reportShiftsByKey.get(key);
+                if (!reportShift) {
+                    reportShift = { userId: record.userId, checkIn: originalStart, checkOut: null,
+                        duration: 0, status: record.status || 'Present', hasRealCheckOut: false };
+                    reportShiftsByKey.set(key, reportShift);
+                }
+                reportShift.duration += shift.duration || 0;
+
+                // A boundary is only an accounting split. Prefer the actual
+                // checkout punch from the segment that closes the logical shift.
+                if (shift.checkOut) {
+                    const isRealCheckOut = shift.checkOutSource !== 'boundary';
+                    if (isRealCheckOut && (!reportShift.hasRealCheckOut || shift.checkOut > reportShift.checkOut)) {
+                        reportShift.checkOut = shift.checkOut;
+                        reportShift.hasRealCheckOut = true;
+                    } else if (!reportShift.hasRealCheckOut &&
+                        (!reportShift.checkOut || shift.checkOut > reportShift.checkOut)) {
+                        reportShift.checkOut = shift.checkOut;
+                    }
+                }
+            }
+        }
+
+        const allAttendance = [...reportShiftsByKey.values(), ...attendanceInWindow];
+        console.log(`[Report] After logical shift window filter: ${allAttendance.length} rows.`);
 
         // --- SEND EMAILS ---
         const transporter = nodemailer.createTransport({
@@ -248,6 +288,24 @@ const sendDailyReport = async (tenantId = null) => {
                 return recordTid === tid;
             });
 
+            // Count employees once, even when the employee has multiple shifts.
+            const presentEmployeeIds = new Set();
+            const absentEmployeeIds = new Set();
+            const reportEmployeeIds = new Set();
+            for (const row of tenantAttendance) {
+                const employeeId = row.userId?._id?.toString();
+                if (!employeeId) continue;
+                reportEmployeeIds.add(employeeId);
+                if (row.checkIn) presentEmployeeIds.add(employeeId);
+                if (row.status === 'Absent') absentEmployeeIds.add(employeeId);
+            }
+            // A present employee cannot also be counted absent if they have
+            // multiple records inside this report window.
+            for (const employeeId of presentEmployeeIds) absentEmployeeIds.delete(employeeId);
+            const totalPresent = presentEmployeeIds.size;
+            const totalAbsent = absentEmployeeIds.size;
+            const totalEmployees = reportEmployeeIds.size;
+
             console.log(`[Report] Tenant "${tenantAdminName}" — ${tenantAttendance.length} records, sending to: ${recipients.map(r => r.email).join(', ')}`);
 
             // Sort by department A->Z, then by employee name A->Z
@@ -267,41 +325,36 @@ const sendDailyReport = async (tenantId = null) => {
             const worksheet = workbook.addWorksheet(`Attendance_${dateLabel}`);
 
             worksheet.columns = [
-                { header: 'Employee ID',      key: 'empId',    width: 15 },
-                { header: 'Name',             key: 'name',     width: 25 },
-                { header: 'Department',       key: 'dept',     width: 20 },
-                { header: 'Check In',         key: 'checkIn',  width: 15 },
-                { header: 'Check Out',        key: 'checkOut', width: 15 },
-                { header: 'Duration',         key: 'duration', width: 12 },
-                { header: 'Status',           key: 'status',   width: 15 },
-                { header: 'OT Status',        key: 'otStatus', width: 15 },
-                { header: 'OT In',            key: 'otIn',     width: 15 },
-                { header: 'OT Out',           key: 'otOut',    width: 15 },
-                { header: 'OT Reject Reason', key: 'otReason', width: 30 },
+                { key: 'empId',    width: 15 },
+                { key: 'name',     width: 25 },
+                { key: 'dept',     width: 20 },
+                { key: 'checkIn',  width: 22 },
+                { key: 'checkOut', width: 22 },
+                { key: 'duration', width: 12 },
+                { key: 'status',   width: 15 },
             ];
 
+            // Put the totals at the top of the attachment, before the table headers.
+            worksheet.addRow([`Total employees: ${totalEmployees}`, `Present: ${totalPresent}`, `Absent: ${totalAbsent}`]);
+            worksheet.addRow(['Employee ID', 'Name', 'Department', 'Check In', 'Check Out', 'Duration', 'Status']);
+
             tenantAttendance.forEach(r => {
-                // Summary times must come from one completed session, not a later missed checkout.
-                const completedShift = [...(r.shifts || [])].reverse().find(s => s.checkIn && s.checkOut && !s.missed);
-                const reportCheckIn = completedShift ? completedShift.checkIn : r.checkIn;
-                const reportCheckOut = completedShift ? completedShift.checkOut : r.checkOut;
                 worksheet.addRow({
                     empId:    r.userId?.employeeId || 'N/A',
                     name:     r.userId?.name       || 'Unknown',
                     dept:     r.userId?.department || 'N/A',
-                    checkIn:  reportCheckIn  ? formatInTimeZone(reportCheckIn,  'Asia/Karachi', 'hh:mm a') : '-',
-                    checkOut: reportCheckOut ? formatInTimeZone(reportCheckOut, 'Asia/Karachi', 'hh:mm a') : '-',
+                    checkIn:  r.checkIn  ? formatInTimeZone(r.checkIn,  'Asia/Karachi', 'dd-MMM hh:mm a') : '-',
+                    checkOut: r.checkOut ? formatInTimeZone(r.checkOut, 'Asia/Karachi', 'dd-MMM hh:mm a') : '-',
                     duration: r.duration ? `${Math.floor(r.duration / 60)}h ${r.duration % 60}m`   : '-',
                     status:   r.status,
-                    otStatus: r.overtimeStatus || 'None',
-                    otIn:     r.overtimeIn  ? formatInTimeZone(r.overtimeIn,  'Asia/Karachi', 'hh:mm a') : '-',
-                    otOut:    r.overtimeOut ? formatInTimeZone(r.overtimeOut, 'Asia/Karachi', 'hh:mm a') : '-',
-                    otReason: r.overtimeRejectReason || '-',
                 });
             });
 
             worksheet.getRow(1).font = { bold: true };
-            worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
+            worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCEFE2' } };
+            worksheet.getRow(2).font = { bold: true };
+            worksheet.getRow(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
+            worksheet.views = [{ state: 'frozen', ySplit: 2 }];
 
             const buffer = await workbook.xlsx.writeBuffer();
 
@@ -310,7 +363,7 @@ const sendDailyReport = async (tenantId = null) => {
                     from: `"HRMS Attendance System" <${process.env.EMAIL_USER}>`,
                     to: recipient.email,
                     subject: `Attendance Report - ${dateLabel}`,
-                    text: `Hello ${recipient.name},\n\nPlease find attached the attendance report for your employees.\n\nPeriod: ${windowLabel}\nTotal records: ${tenantAttendance.length}\n\nRegards,\nHRMS Automation`,
+                    text: `Hello ${recipient.name},\n\nPlease find attached the attendance report for your employees.\n\nPeriod: ${windowLabel}\nTotal employees: ${totalEmployees}\nPresent: ${totalPresent}\nAbsent: ${totalAbsent}\n\nRegards,\nHRMS Automation`,
                     attachments: [{
                         filename: `Attendance_Report_${dateLabel}.xlsx`,
                         content: buffer

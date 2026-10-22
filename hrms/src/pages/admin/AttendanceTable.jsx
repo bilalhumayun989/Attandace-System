@@ -1,11 +1,11 @@
 import React from 'react';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
+import { formatAttendanceDateTime } from '../../utils/attendanceDisplay';
 
 export const AttendanceTable = ({
   filteredAttendance,
   loading,
-  format12h,
   calculateHours,
   handleUpdateStatus,
   setSelectedRecord,
@@ -77,10 +77,10 @@ export const AttendanceTable = ({
                 {record.userId?.department || <span className="text-muted-foreground/50 font-normal">—</span>}
               </span>
             </td>
-            <td className="px-6 py-4 text-muted-foreground font-medium">{format12h(displayCheckIn)}</td>
+            <td className="px-6 py-4 text-muted-foreground font-medium">{formatAttendanceDateTime(displayCheckIn)}</td>
             <td className="px-6 py-4 text-muted-foreground font-medium">
               {displayCheckOut
-                ? format12h(displayCheckOut)
+                ? formatAttendanceDateTime(displayCheckOut)
                 : isActive
                   ? <span className="text-amber-500 font-medium">Active</span>
                   : '-'}

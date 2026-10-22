@@ -8,6 +8,7 @@ import { Input } from '../../components/ui/Input';
 import { Search, Filter, Download, Calendar as CalendarIcon, Info, ChevronLeft, ChevronRight, ChevronDown, User as UserIcon, Zap, Mail } from 'lucide-react';
 import { Modal } from '../../components/ui/Modal';
 import { usePermissions } from '../../context/PermissionsContext';
+import { formatAttendanceDateTime, prepareAttendanceForDisplay } from '../../utils/attendanceDisplay';
 
 const AttendanceTracker = () => {
     const now = new Date();
@@ -133,7 +134,7 @@ const AttendanceTracker = () => {
 
     // Filter Logic
     const filteredAttendance = useMemo(() => {
-        return attendanceData
+        return prepareAttendanceForDisplay(attendanceData)
             .filter(r => {
                 const [year, month, day] = r.date.split('-');
                 const matchesYear = year === filterYear;
@@ -169,24 +170,72 @@ const AttendanceTracker = () => {
     }, [filteredAttendance]);
 
     const handleExport = () => {
-        const headers = ['Date', 'Employee ID', 'Name', 'Check In', 'Check Out', 'Duration', 'Status'];
-        const rows = filteredAttendance.map(r => {
-            // Prefer the latest completed session when a later checkout was missed.
-            const completedShift = [...(r.shifts || [])].reverse().find(s => s.checkIn && s.checkOut && !s.missed);
-            const reportCheckIn = completedShift ? completedShift.checkIn : r.checkIn;
-            const reportCheckOut = completedShift ? completedShift.checkOut : r.checkOut;
-            return [
-                r.date,
-                `"${r.userId?.employeeId || 'N/A'}"`,
-                `"${r.userId?.name || 'Unknown'}"`,
-                `"${reportCheckIn ? format12h(reportCheckIn) : '-'}"`,
-                `"${reportCheckOut ? format12h(reportCheckOut) : '-'}"`,
-                `"${calculateHours(r.duration)}"`,
-                `"${r.status}"`
-            ];
+        const presentEmployeeIds = new Set();
+        const absentEmployeeIds = new Set();
+        const reportEmployeeIds = new Set();
+        filteredAttendance.forEach(record => {
+            const employeeId = String(record.userId?._id || record.userId || '');
+            if (!employeeId) return;
+            reportEmployeeIds.add(employeeId);
+            if (record.checkIn || record.shifts?.some(shift => shift.checkIn)) presentEmployeeIds.add(employeeId);
+            if (record.status === 'Absent') absentEmployeeIds.add(employeeId);
+        });
+        presentEmployeeIds.forEach(employeeId => absentEmployeeIds.delete(employeeId));
+
+        const csvCell = value => `"${String(value ?? '').replace(/"/g, '""')}"`;
+        const summary = [
+            `Total employees: ${reportEmployeeIds.size}`,
+            `Present: ${presentEmployeeIds.size}`,
+            `Absent: ${absentEmployeeIds.size}`
+        ];
+        const headers = ['Employee ID', 'Name', 'Department', 'Check In', 'Check Out', 'Duration', 'Status'];
+        const rows = [];
+
+        // Sort the exported rows by department, then employee name, independent
+        // of the current table's date ordering.
+        const exportRecords = [...filteredAttendance].sort((a, b) => {
+            const deptOrder = (a.userId?.department || '').trim().localeCompare(
+                (b.userId?.department || '').trim(), undefined, { sensitivity: 'base' }
+            );
+            if (deptOrder) return deptOrder;
+            const nameOrder = (a.userId?.name || '').trim().localeCompare(
+                (b.userId?.name || '').trim(), undefined, { sensitivity: 'base' }
+            );
+            return nameOrder || a.date.localeCompare(b.date);
         });
 
-        const csvContent = [headers.map(h => `"${h}"`), ...rows].map(e => e.join(",")).join("\n");
+        exportRecords.forEach(record => {
+            const shifts = record.shifts?.length ? record.shifts : (record.checkIn ? [{
+                checkIn: record.checkIn,
+                checkOut: record.checkOut,
+                duration: record.duration
+            }] : []);
+
+            if (!shifts.length) {
+                rows.push([
+                    record.userId?.employeeId || 'N/A', record.userId?.name || 'Unknown',
+                    record.userId?.department || '-', '-', '-', '-', record.status || '-'
+                ]);
+                return;
+            }
+
+            shifts.forEach(shift => {
+                const duration = Number.isFinite(shift.duration)
+                    ? shift.duration
+                    : (shift.checkIn && shift.checkOut
+                        ? Math.max(0, Math.floor((new Date(shift.checkOut) - new Date(shift.checkIn)) / 60000))
+                        : 0);
+                rows.push([
+                    record.userId?.employeeId || 'N/A', record.userId?.name || 'Unknown',
+                    record.userId?.department || '-',
+                    shift.checkIn ? formatAttendanceDateTime(shift.checkIn) : '-',
+                    shift.checkOut ? formatAttendanceDateTime(shift.checkOut) : '-',
+                    calculateHours(duration), record.status || '-'
+                ]);
+            });
+        });
+
+        const csvContent = [summary, headers, ...rows].map(row => row.map(csvCell).join(',')).join('\n');
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement("a");
         const url = URL.createObjectURL(blob);
@@ -556,7 +605,6 @@ const AttendanceTracker = () => {
                                     <AttendanceTable
                                         filteredAttendance={filteredAttendance}
                                         loading={loading}
-                                        format12h={format12h}
                                         calculateHours={calculateHours}
                                         handleUpdateStatus={handleUpdateStatus}
                                         setSelectedRecord={setSelectedRecord}
@@ -619,13 +667,13 @@ const AttendanceTracker = () => {
                         <div className="grid grid-cols-2 gap-4">
                             <div className="p-3 border rounded-lg">
                                 <p className="text-xs text-muted-foreground">Check In</p>
-                                <p className="font-bold">{format12h(displayCheckIn)}</p>
+                                <p className="font-bold">{formatAttendanceDateTime(displayCheckIn)}</p>
                             </div>
                             <div className="p-3 border rounded-lg">
                                 <p className="text-xs text-muted-foreground">Check Out</p>
                                 <p className="font-bold">
                                     {displayCheckOut
-                                        ? format12h(displayCheckOut)
+                                        ? formatAttendanceDateTime(displayCheckOut)
                                         : isActive
                                             ? <span className="text-amber-500">Active</span>
                                             : '-'}
@@ -660,10 +708,10 @@ const AttendanceTracker = () => {
                                                 return (
                                                     <tr key={idx} className={`hover:bg-muted/20 ${shift.missed ? 'bg-rose-50/40' : ''}`}>
                                                         <td className="px-3 py-2.5 text-muted-foreground font-medium">#{idx + 1}</td>
-                                                        <td className="px-3 py-2.5">{shift.checkIn ? format12h(shift.checkIn) : '--:--'}</td>
+                                                        <td className="px-3 py-2.5">{shift.checkIn ? formatAttendanceDateTime(shift.checkIn) : '--:--'}</td>
                                                         <td className="px-3 py-2.5">
                                                             {shift.checkOut
-                                                                ? format12h(shift.checkOut)
+                                                                ? formatAttendanceDateTime(shift.checkOut)
                                                                 : isThisActive
                                                                     ? <span className="text-amber-500 font-medium">Active</span>
                                                                     : <span className="text-rose-500 font-medium">—</span>}
