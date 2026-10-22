@@ -108,40 +108,22 @@ const sendDailyReport = async (tenantId = null) => {
             throw new Error('EMAIL_USER or EMAIL_PASS not configured in environment variables.');
         }
 
-        // --- WINDOW CALCULATION ---
-        const now = new Date(); // real UTC now
-        let windowStart, windowEnd, windowLabel, dateLabel, datesToQuery;
-
-        if (tenantId) {
-            // Manual trigger: last 24 hours from now
-            // e.g. clicked at 3 PM today → yesterday 3 PM → today 3 PM
-            windowEnd   = now;
-            windowStart = new Date(now.getTime() - (24 * 60 * 60 * 1000));
-
-            const startLabel = formatInTimeZone(windowStart, 'Asia/Karachi', 'yyyy-MM-dd hh:mm a');
-            const endLabel   = formatInTimeZone(windowEnd,   'Asia/Karachi', 'yyyy-MM-dd hh:mm a');
-            windowLabel = `${startLabel} to ${endLabel} (PKT)`;
-            dateLabel   = formatInTimeZone(now, 'Asia/Karachi', 'yyyy-MM-dd');
-
-            // Could span two calendar dates — query both
-            const startDateStr = formatInTimeZone(windowStart, 'Asia/Karachi', 'yyyy-MM-dd');
-            const endDateStr   = formatInTimeZone(windowEnd,   'Asia/Karachi', 'yyyy-MM-dd');
-            datesToQuery = startDateStr === endDateStr ? [startDateStr] : [startDateStr, endDateStr];
-
-            console.log(`[Report] Manual trigger for tenant ${tenantId} — window: ${windowLabel}`);
-        } else {
-            // Cron: yesterday 6 AM PKT → today 6 AM PKT (fixed window)
-            const todayStr = getPKTDateString();
-            windowEnd   = new Date(`${todayStr}T06:00:00+05:00`);
-            windowStart = new Date(windowEnd.getTime() - (24 * 60 * 60 * 1000));
-
-            const yesterdayStr = formatInTimeZone(windowStart, 'Asia/Karachi', 'yyyy-MM-dd');
-            dateLabel   = `${yesterdayStr}_to_${todayStr}`;
-            windowLabel = `${yesterdayStr} 6:00 AM to ${todayStr} 6:00 AM (PKT)`;
-            datesToQuery = [yesterdayStr, todayStr];
-
-            console.log(`[Report] Cron window: ${windowLabel}`);
-        }
+        // Both scheduled and manually triggered reports use the last completed
+        // attendance workday: 6:00 AM PKT to the next 6:00 AM PKT.
+        const now = new Date();
+        const todayStr = getPKTDateString(now);
+        const todaySixAm = new Date(`${todayStr}T06:00:00+05:00`);
+        const windowEnd = now >= todaySixAm
+            ? todaySixAm
+            : new Date(todaySixAm.getTime() - (24 * 60 * 60 * 1000));
+        const windowStart = new Date(windowEnd.getTime() - (24 * 60 * 60 * 1000));
+        const reportWorkDate = getPKTDateString(windowStart);
+        const windowEndDate = getPKTDateString(windowEnd);
+        const dateLabel = `${reportWorkDate}_to_${windowEndDate}`;
+        const windowLabel = `${reportWorkDate} 6:00 AM to ${windowEndDate} 6:00 AM (PKT)`;
+        // A boundary split may be stored on either calendar date.
+        const datesToQuery = [reportWorkDate, windowEndDate];
+        console.log(`[Report] ${tenantId ? `Manual report for tenant ${tenantId}` : 'Scheduled report'}: ${windowLabel}`);
 
         // --- FETCH TENANT ROOTS ---
         // Both 'Admin' and 'SuperAdmin' can be tenant roots (owner accounts where adminId == own _id)
@@ -215,7 +197,7 @@ const sendDailyReport = async (tenantId = null) => {
         // the stored split records and is not changed here.
         const attendanceInWindow = rawAttendance.filter(r => {
             if (!r.userId) return false;
-            return !r.checkIn && datesToQuery.includes(r.date);
+            return !r.checkIn && r.date === reportWorkDate;
         });
 
         const reportShiftsByKey = new Map();
@@ -228,7 +210,7 @@ const sendDailyReport = async (tenantId = null) => {
                 const key = `${record.userId._id}:${+start}`;
                 reportShiftsByKey.set(key, {
                     userId: record.userId, checkIn: start, checkOut: record.checkOut || null,
-                    duration: record.duration || 0, status: record.status || 'Present', date: record.date
+                    duration: record.duration || 0, status: record.status || 'Present'
                 });
                 continue;
             }
@@ -240,10 +222,9 @@ const sendDailyReport = async (tenantId = null) => {
                 let reportShift = reportShiftsByKey.get(key);
                 if (!reportShift) {
                     reportShift = { userId: record.userId, checkIn: originalStart, checkOut: null,
-                        duration: 0, status: record.status || 'Present', hasRealCheckOut: false, date: record.date };
+                        duration: 0, status: record.status || 'Present', hasRealCheckOut: false };
                     reportShiftsByKey.set(key, reportShift);
                 }
-                if (+shift.checkIn === +originalStart) reportShift.date = record.date;
                 reportShift.duration += shift.duration || 0;
 
                 // A boundary is only an accounting split. Prefer the actual
@@ -293,26 +274,16 @@ const sendDailyReport = async (tenantId = null) => {
             const presentEmployeeIds = new Set();
             const absentEmployeeIds = new Set();
             const reportEmployeeIds = new Set();
-            const dailyCounts = new Map();
             for (const row of tenantAttendance) {
                 const employeeId = row.userId?._id?.toString();
                 if (!employeeId) continue;
                 reportEmployeeIds.add(employeeId);
                 if (row.checkIn) presentEmployeeIds.add(employeeId);
                 if (row.status === 'Absent') absentEmployeeIds.add(employeeId);
-
-                const attendanceDate = row.date || getPKTDateString(row.checkIn);
-                if (!dailyCounts.has(attendanceDate)) {
-                    dailyCounts.set(attendanceDate, { present: new Set(), absent: new Set() });
-                }
-                const day = dailyCounts.get(attendanceDate);
-                if (row.checkIn) day.present.add(employeeId);
-                if (row.status === 'Absent') day.absent.add(employeeId);
             }
             // A present employee cannot also be counted absent if they have
-            // multiple records inside this report window.
+            // multiple shifts inside this workday.
             for (const employeeId of presentEmployeeIds) absentEmployeeIds.delete(employeeId);
-            dailyCounts.forEach(day => day.present.forEach(employeeId => day.absent.delete(employeeId)));
             const totalPresent = presentEmployeeIds.size;
             const totalAbsent = absentEmployeeIds.size;
             const totalEmployees = reportEmployeeIds.size;
@@ -345,14 +316,8 @@ const sendDailyReport = async (tenantId = null) => {
                 { key: 'status',   width: 15 },
             ];
 
-            // Put period totals and date-by-date totals above the attendance rows.
-            worksheet.addRow([`Employees in period: ${totalEmployees}`, `Present in period (unique): ${totalPresent}`, `Absent in period (unique): ${totalAbsent}`]);
-            worksheet.addRow(['Daily totals']);
-            worksheet.addRow(['Attendance date', 'Present', 'Absent']);
-            [...dailyCounts.entries()].sort(([dateA], [dateB]) => dateA.localeCompare(dateB)).forEach(([date, day]) => {
-                worksheet.addRow([date, day.present.size, day.absent.size]);
-            });
-            worksheet.addRow([]);
+            // The report contains exactly one 6 AM-to-6 AM workday.
+            worksheet.addRow([`Total employees: ${totalEmployees}`, `Present: ${totalPresent}`, `Absent: ${totalAbsent}`]);
             const tableHeaderRow = worksheet.addRow(['Employee ID', 'Name', 'Department', 'Check In', 'Check Out', 'Duration', 'Status']).number;
 
             tenantAttendance.forEach(r => {
@@ -370,7 +335,6 @@ const sendDailyReport = async (tenantId = null) => {
             worksheet.getRow(1).font = { bold: true };
             worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCEFE2' } };
             worksheet.getRow(2).font = { bold: true };
-            worksheet.getRow(3).font = { bold: true };
             worksheet.getRow(tableHeaderRow).font = { bold: true };
             worksheet.getRow(tableHeaderRow).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
             worksheet.views = [{ state: 'frozen', ySplit: tableHeaderRow }];
@@ -382,7 +346,7 @@ const sendDailyReport = async (tenantId = null) => {
                     from: `"HRMS Attendance System" <${process.env.EMAIL_USER}>`,
                     to: recipient.email,
                     subject: `Attendance Report - ${dateLabel}`,
-                    text: `Hello ${recipient.name},\n\nPlease find attached the attendance report for your employees.\n\nPeriod: ${windowLabel}\nTotal employees in period: ${totalEmployees}\nUnique present in period: ${totalPresent}\nUnique absent in period: ${totalAbsent}\n\nDaily totals (attendance date | present | absent):\n${[...dailyCounts.entries()].sort(([dateA], [dateB]) => dateA.localeCompare(dateB)).map(([date, day]) => `${date} | ${day.present.size} | ${day.absent.size}`).join('\n')}\n\nRegards,\nHRMS Automation`,
+                    text: `Hello ${recipient.name},\n\nPlease find attached the attendance report for your employees.\n\nAttendance workday: ${windowLabel}\nTotal employees: ${totalEmployees}\nPresent: ${totalPresent}\nAbsent: ${totalAbsent}\n\nRegards,\nHRMS Automation`,
                     attachments: [{
                         filename: `Attendance_Report_${dateLabel}.xlsx`,
                         content: buffer
