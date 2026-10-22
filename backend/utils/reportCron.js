@@ -228,7 +228,7 @@ const sendDailyReport = async (tenantId = null) => {
                 const key = `${record.userId._id}:${+start}`;
                 reportShiftsByKey.set(key, {
                     userId: record.userId, checkIn: start, checkOut: record.checkOut || null,
-                    duration: record.duration || 0, status: record.status || 'Present'
+                    duration: record.duration || 0, status: record.status || 'Present', date: record.date
                 });
                 continue;
             }
@@ -240,9 +240,10 @@ const sendDailyReport = async (tenantId = null) => {
                 let reportShift = reportShiftsByKey.get(key);
                 if (!reportShift) {
                     reportShift = { userId: record.userId, checkIn: originalStart, checkOut: null,
-                        duration: 0, status: record.status || 'Present', hasRealCheckOut: false };
+                        duration: 0, status: record.status || 'Present', hasRealCheckOut: false, date: record.date };
                     reportShiftsByKey.set(key, reportShift);
                 }
+                if (+shift.checkIn === +originalStart) reportShift.date = record.date;
                 reportShift.duration += shift.duration || 0;
 
                 // A boundary is only an accounting split. Prefer the actual
@@ -292,16 +293,26 @@ const sendDailyReport = async (tenantId = null) => {
             const presentEmployeeIds = new Set();
             const absentEmployeeIds = new Set();
             const reportEmployeeIds = new Set();
+            const dailyCounts = new Map();
             for (const row of tenantAttendance) {
                 const employeeId = row.userId?._id?.toString();
                 if (!employeeId) continue;
                 reportEmployeeIds.add(employeeId);
                 if (row.checkIn) presentEmployeeIds.add(employeeId);
                 if (row.status === 'Absent') absentEmployeeIds.add(employeeId);
+
+                const attendanceDate = row.date || getPKTDateString(row.checkIn);
+                if (!dailyCounts.has(attendanceDate)) {
+                    dailyCounts.set(attendanceDate, { present: new Set(), absent: new Set() });
+                }
+                const day = dailyCounts.get(attendanceDate);
+                if (row.checkIn) day.present.add(employeeId);
+                if (row.status === 'Absent') day.absent.add(employeeId);
             }
             // A present employee cannot also be counted absent if they have
             // multiple records inside this report window.
             for (const employeeId of presentEmployeeIds) absentEmployeeIds.delete(employeeId);
+            dailyCounts.forEach(day => day.present.forEach(employeeId => day.absent.delete(employeeId)));
             const totalPresent = presentEmployeeIds.size;
             const totalAbsent = absentEmployeeIds.size;
             const totalEmployees = reportEmployeeIds.size;
@@ -334,9 +345,15 @@ const sendDailyReport = async (tenantId = null) => {
                 { key: 'status',   width: 15 },
             ];
 
-            // Put the totals at the top of the attachment, before the table headers.
-            worksheet.addRow([`Total employees: ${totalEmployees}`, `Present: ${totalPresent}`, `Absent: ${totalAbsent}`]);
-            worksheet.addRow(['Employee ID', 'Name', 'Department', 'Check In', 'Check Out', 'Duration', 'Status']);
+            // Put period totals and date-by-date totals above the attendance rows.
+            worksheet.addRow([`Employees in period: ${totalEmployees}`, `Present in period (unique): ${totalPresent}`, `Absent in period (unique): ${totalAbsent}`]);
+            worksheet.addRow(['Daily totals']);
+            worksheet.addRow(['Attendance date', 'Present', 'Absent']);
+            [...dailyCounts.entries()].sort(([dateA], [dateB]) => dateA.localeCompare(dateB)).forEach(([date, day]) => {
+                worksheet.addRow([date, day.present.size, day.absent.size]);
+            });
+            worksheet.addRow([]);
+            const tableHeaderRow = worksheet.addRow(['Employee ID', 'Name', 'Department', 'Check In', 'Check Out', 'Duration', 'Status']).number;
 
             tenantAttendance.forEach(r => {
                 worksheet.addRow({
@@ -353,8 +370,10 @@ const sendDailyReport = async (tenantId = null) => {
             worksheet.getRow(1).font = { bold: true };
             worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCEFE2' } };
             worksheet.getRow(2).font = { bold: true };
-            worksheet.getRow(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
-            worksheet.views = [{ state: 'frozen', ySplit: 2 }];
+            worksheet.getRow(3).font = { bold: true };
+            worksheet.getRow(tableHeaderRow).font = { bold: true };
+            worksheet.getRow(tableHeaderRow).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
+            worksheet.views = [{ state: 'frozen', ySplit: tableHeaderRow }];
 
             const buffer = await workbook.xlsx.writeBuffer();
 
@@ -363,7 +382,7 @@ const sendDailyReport = async (tenantId = null) => {
                     from: `"HRMS Attendance System" <${process.env.EMAIL_USER}>`,
                     to: recipient.email,
                     subject: `Attendance Report - ${dateLabel}`,
-                    text: `Hello ${recipient.name},\n\nPlease find attached the attendance report for your employees.\n\nPeriod: ${windowLabel}\nTotal employees: ${totalEmployees}\nPresent: ${totalPresent}\nAbsent: ${totalAbsent}\n\nRegards,\nHRMS Automation`,
+                    text: `Hello ${recipient.name},\n\nPlease find attached the attendance report for your employees.\n\nPeriod: ${windowLabel}\nTotal employees in period: ${totalEmployees}\nUnique present in period: ${totalPresent}\nUnique absent in period: ${totalAbsent}\n\nDaily totals (attendance date | present | absent):\n${[...dailyCounts.entries()].sort(([dateA], [dateB]) => dateA.localeCompare(dateB)).map(([date, day]) => `${date} | ${day.present.size} | ${day.absent.size}`).join('\n')}\n\nRegards,\nHRMS Automation`,
                     attachments: [{
                         filename: `Attendance_Report_${dateLabel}.xlsx`,
                         content: buffer

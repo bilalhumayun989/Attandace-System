@@ -173,20 +173,34 @@ const AttendanceTracker = () => {
         const presentEmployeeIds = new Set();
         const absentEmployeeIds = new Set();
         const reportEmployeeIds = new Set();
+        const dailyCounts = new Map();
         filteredAttendance.forEach(record => {
             const employeeId = String(record.userId?._id || record.userId || '');
             if (!employeeId) return;
             reportEmployeeIds.add(employeeId);
-            if (record.checkIn || record.shifts?.some(shift => shift.checkIn)) presentEmployeeIds.add(employeeId);
+            const hasCheckIn = Boolean(record.checkIn || record.shifts?.some(shift => shift.checkIn));
+            if (hasCheckIn) presentEmployeeIds.add(employeeId);
             if (record.status === 'Absent') absentEmployeeIds.add(employeeId);
+
+            if (!dailyCounts.has(record.date)) {
+                dailyCounts.set(record.date, { present: new Set(), absent: new Set() });
+            }
+            const day = dailyCounts.get(record.date);
+            if (hasCheckIn) day.present.add(employeeId);
+            if (record.status === 'Absent') day.absent.add(employeeId);
         });
         presentEmployeeIds.forEach(employeeId => absentEmployeeIds.delete(employeeId));
+        dailyCounts.forEach(day => day.present.forEach(employeeId => day.absent.delete(employeeId)));
 
         const csvCell = value => `"${String(value ?? '').replace(/"/g, '""')}"`;
-        const summary = [
-            `Total employees: ${reportEmployeeIds.size}`,
-            `Present: ${presentEmployeeIds.size}`,
-            `Absent: ${absentEmployeeIds.size}`
+        const summaryRows = [
+            [`Total employees in selection: ${reportEmployeeIds.size}`, `Present across selection: ${presentEmployeeIds.size}`, `Absent across selection: ${absentEmployeeIds.size}`],
+            ['Daily totals'],
+            ['Attendance date', 'Present', 'Absent'],
+            ...[...dailyCounts.entries()].sort(([dateA], [dateB]) => dateA.localeCompare(dateB)).map(([date, day]) => [
+                date, day.present.size, day.absent.size
+            ]),
+            []
         ];
         const headers = ['Employee ID', 'Name', 'Department', 'Check In', 'Check Out', 'Duration', 'Status'];
         const rows = [];
@@ -235,7 +249,7 @@ const AttendanceTracker = () => {
             });
         });
 
-        const csvContent = [summary, headers, ...rows].map(row => row.map(csvCell).join(',')).join('\n');
+        const csvContent = [...summaryRows, headers, ...rows].map(row => row.map(csvCell).join(',')).join('\n');
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement("a");
         const url = URL.createObjectURL(blob);
