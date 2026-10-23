@@ -589,11 +589,11 @@ router.post('/fingerprint-checkin', kioskAuth, async (req, res) => {
       if (open) {
         const start = new Date(open.checkIn);
         const elapsedMinutes = (now - start) / 60000;
-        if (elapsedMinutes < 30) {
+        if (elapsedMinutes < 1) {
           return result({
             action: 'too_soon', status: 'checked_in', employeeName: user.name,
-            retryAfterSeconds: Math.max(1, Math.ceil((30 - elapsedMinutes) * 60)),
-            message: 'روانگی آمد کے کم از کم 30 منٹ بعد درج ہو سکتی ہے۔'
+            retryAfterSeconds: Math.max(1, Math.ceil((1 - elapsedMinutes) * 60)),
+            message: 'روانگی آمد کے کم از کم 1 منٹ بعد درج ہو سکتی ہے۔'
           });
         }
         const startWorkDay = getWorkDay(start);
