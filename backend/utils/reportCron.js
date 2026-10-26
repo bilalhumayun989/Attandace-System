@@ -49,43 +49,23 @@ const runAutoCheckOut = async (scope = {}, asOf = null, session = null) => {
                 // Re-read after acquiring the employee write lock; a scan may have won.
                 const record = await Attendance.findOne({ ...filter, _id: candidate._id }).session(activeSession);
                 if (!record) return;
-                const start = new Date(record.checkIn);
-                const end = new Date(start.getTime() + 20 * 60 * 60 * 1000);
-                const endWorkDay = getPKTDateString(new Date(end.getTime() - 6 * 60 * 60 * 1000));
-                const boundary = new Date(endWorkDay + 'T06:00:00.000+05:00');
-                const finishSession = (attendance, checkIn, checkOut) => {
-                    const duration = Math.max(0, Math.floor((checkOut - checkIn) / 60000));
-                    const checkInSource = checkIn > start ? 'boundary' : record.checkInSource;
-                    const checkOutSource = +checkOut === +end ? 'automatic' : 'boundary';
-                    const entry = { checkIn, checkOut, duration, missed: false,
-                        checkInSource, checkOutSource, sessionStart: start };
-                    if (!attendance.shifts) attendance.shifts = [];
-                    const last = attendance.shifts[attendance.shifts.length - 1];
-                    if (last && !last.checkOut && !last.missed) Object.assign(last, entry);
-                    else attendance.shifts.push(entry);
-                    attendance.checkOut = checkOut;
-                    attendance.checkOutSource = checkOutSource;
-                    attendance.duration = (attendance.duration || 0) + duration;
-                    attendance.status = 'Present';
-                    attendance.isCheckingOut = false;
-                };
-                if (start < boundary) {
-                    let nextDay = await Attendance.findOne({
-                        userId: record.userId, adminId: record.adminId, date: endWorkDay
-                    }).session(activeSession);
-                    if (!nextDay) nextDay = new Attendance({
-                        userId: record.userId, adminId: record.adminId, date: endWorkDay, shifts: []
-                    });
-                    finishSession(record, start, boundary);
-                    nextDay.checkIn = boundary;
-                    nextDay.checkInSource = 'boundary';
-                    finishSession(nextDay, boundary, end);
-                    await record.save({ session: activeSession });
-                    await nextDay.save({ session: activeSession });
+                const last = record.shifts?.[record.shifts.length - 1];
+                if (last && !last.checkOut) {
+                    last.missed = true;
                 } else {
-                    finishSession(record, start, end);
-                    await record.save({ session: activeSession });
+                    record.shifts.push({
+                        checkIn: record.checkIn,
+                        checkOut: null,
+                        duration: 0,
+                        missed: true,
+                        checkInSource: record.checkInSource
+                    });
                 }
+                record.checkOut = null;
+                record.checkOutSource = undefined;
+                record.status = 'Absent';
+                record.isCheckingOut = false;
+                await record.save({ session: activeSession });
             };
             if (session) await close(session);
             else await withAttendanceTransaction(candidate, close);
