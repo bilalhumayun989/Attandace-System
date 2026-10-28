@@ -32,6 +32,7 @@ const AdminDashboard = () => {
         completedCheckouts: 0,
     });
     const pollingRef = useRef(null);
+    const dashboardFetchInProgress = useRef(false);
     const [isBiometricModalOpen, setIsBiometricModalOpen] = useState(false);
     const [recentActivity, setRecentActivity] = useState([]);
     const [chartData, setChartData] = useState([]);
@@ -65,6 +66,8 @@ const AdminDashboard = () => {
     };
 
     const fetchDashboardData = async () => {
+        if (dashboardFetchInProgress.current) return;
+        dashboardFetchInProgress.current = true;
         try {
             const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
             const from = new Date(`${today}T00:00:00Z`);
@@ -174,6 +177,7 @@ const AdminDashboard = () => {
         } catch (error) {
             console.error('Error fetching admin dashboard data:', error);
         } finally {
+            dashboardFetchInProgress.current = false;
             setLoading(false);
         }
     };
@@ -231,8 +235,37 @@ const AdminDashboard = () => {
 
     if (loading) {
         return (
-            <div className="flex items-center justify-center h-full min-h-[400px]">
-                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <div className="space-y-6" aria-label="Loading dashboard" aria-busy="true">
+                <div className="flex items-center gap-3 rounded-2xl border border-border/40 bg-card/70 p-5 shadow-sm">
+                    <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                    </span>
+                    <div>
+                        <div className="font-semibold">Preparing your dashboard</div>
+                        <div className="text-sm text-muted-foreground">Loading the latest attendance overview…</div>
+                    </div>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    {Array.from({ length: 3 }, (_, index) => (
+                        <div key={index} className="animate-pulse rounded-xl border border-border/40 bg-card/60 p-6">
+                            <div className="h-4 w-32 rounded bg-muted" />
+                            <div className="mt-5 h-8 w-20 rounded bg-muted" />
+                            <div className="mt-3 h-3 w-40 rounded bg-muted/70" />
+                        </div>
+                    ))}
+                </div>
+                <div className="grid gap-4 lg:grid-cols-7">
+                    <div className="h-[390px] animate-pulse rounded-xl border border-border/40 bg-card/60 p-6 lg:col-span-4">
+                        <div className="h-5 w-48 rounded bg-muted" />
+                        <div className="mt-8 h-[300px] rounded-lg bg-muted/50" />
+                    </div>
+                    <div className="h-[390px] animate-pulse rounded-xl border border-border/40 bg-card/60 p-6 lg:col-span-3">
+                        <div className="h-5 w-40 rounded bg-muted" />
+                        <div className="mt-8 space-y-5">
+                            {Array.from({ length: 4 }, (_, index) => <div key={index} className="h-12 rounded-lg bg-muted/60" />)}
+                        </div>
+                    </div>
+                </div>
             </div>
         );
     }
