@@ -47,7 +47,13 @@ const protect = async (req, res, next) => {
                 }
 
                 // TENANCY: Attach scoped adminId to the request for easy filtering
-                req.adminId = (req.user.role === 'Admin' || req.user.role === 'SuperAdmin') ? req.user._id : req.user.adminId;
+                // A SuperAdmin linked to a tenant operates within that tenant.
+                // Unlinked SuperAdmins and regular Admins own their tenant.
+                req.adminId = req.user.role === 'SuperAdmin'
+                    ? (req.user.adminId || req.user._id)
+                    : req.user.role === 'Admin'
+                        ? req.user._id
+                        : req.user.adminId;
             }
 
             next();
