@@ -649,11 +649,15 @@ const addCustomAttendance = async (req, res) => {
 // @access  Private/Admin
 const getAllAttendance = async (req, res) => {
     try {
-        // Trigger reconciliation for all staff in bulk before fetching
-        const users = await User.find({ role: { $nin: ['Admin', 'SuperAdmin'] }, adminId: req.adminId, status: { $ne: 'Deleted' } });
-        await reconcileMultipleUsersAttendance(users);
+        // Keep list reads read-only. Reconciliation belongs to the explicit
+        // history and scheduled attendance flows, not a user-facing table load.
+        const dateRange = {};
+        if (req.query.from) dateRange.$gte = req.query.from;
+        if (req.query.to) dateRange.$lte = req.query.to;
 
-        const attendance = await Attendance.find({ adminId: req.adminId })
+        const query = { adminId: req.adminId };
+        if (Object.keys(dateRange).length) query.date = dateRange;
+        const attendance = await Attendance.find(query)
             .populate({ path: 'userId', select: 'name employeeId role department offDays', match: { status: { $ne: 'Deleted' }, adminId: req.adminId } })
             .sort({ date: -1, createdAt: -1 });
         res.json(attendance.filter(record => record.userId));

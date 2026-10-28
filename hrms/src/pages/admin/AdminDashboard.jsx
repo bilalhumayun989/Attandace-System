@@ -66,10 +66,14 @@ const AdminDashboard = () => {
 
     const fetchDashboardData = async () => {
         try {
+            const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
+            const from = new Date(`${today}T00:00:00Z`);
+            from.setUTCDate(from.getUTCDate() - 6);
+            const fromDate = from.toISOString().slice(0, 10);
             // Fetch data in parallel
             const [usersRes, attendanceRes, statusRes] = await Promise.all([
                 fetch(`${API_BASE_URL}/users`, { headers: { 'X-Role-Context': 'Admin' }, credentials: 'include' }),
-                fetch(`${API_BASE_URL}/attendance`, { headers: { 'X-Role-Context': 'Admin' }, credentials: 'include' }),
+                fetch(`${API_BASE_URL}/attendance?from=${fromDate}&to=${today}`, { headers: { 'X-Role-Context': 'Admin' }, credentials: 'include' }),
                 fetch(`${API_BASE_URL}/attendance/status`, { headers: { 'X-Role-Context': 'Admin' }, credentials: 'include' })
             ]);
 
@@ -82,7 +86,6 @@ const AdminDashboard = () => {
             const totalEmployees = employeesList.length;
 
             // 2. Process Today's Attendance
-            const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
             const todaysAttendance = Array.isArray(attendance) ? attendance.filter(a => a.date === today) : [];
             const checkInsToday = todaysAttendance.filter(a => a.checkIn).length;
             const completedCheckouts = todaysAttendance.filter(a => a.checkOut).length;

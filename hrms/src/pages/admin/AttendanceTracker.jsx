@@ -76,6 +76,9 @@ const AttendanceTracker = () => {
 
     useEffect(() => {
         fetchAttendance();
+    }, [filterDay, filterMonth, filterYear]);
+
+    useEffect(() => {
         fetchAllEmployees();
     }, []);
 
@@ -97,7 +100,23 @@ const AttendanceTracker = () => {
     const fetchAttendance = async () => {
         setLoading(true);
         try {
-            const response = await fetch(`${API_BASE_URL}/attendance`, {
+            const params = new URLSearchParams();
+            if (filterYear !== 'All' && filterMonth !== 'All') {
+                if (filterDay !== 'All') {
+                    const date = `${filterYear}-${filterMonth}-${filterDay}`;
+                    params.set('from', date);
+                    params.set('to', date);
+                } else {
+                    const lastDay = new Date(Number(filterYear), Number(filterMonth), 0).getDate();
+                    params.set('from', `${filterYear}-${filterMonth}-01`);
+                    params.set('to', `${filterYear}-${filterMonth}-${String(lastDay).padStart(2, '0')}`);
+                }
+            } else if (filterYear !== 'All') {
+                params.set('from', `${filterYear}-01-01`);
+                params.set('to', `${filterYear}-12-31`);
+            }
+            const query = params.toString();
+            const response = await fetch(`${API_BASE_URL}/attendance${query ? `?${query}` : ''}`, {
                 headers: { 'X-Role-Context': 'Admin' },
                 credentials: 'include'
             });
@@ -137,7 +156,7 @@ const AttendanceTracker = () => {
         return prepareAttendanceForDisplay(attendanceData)
             .filter(r => {
                 const [year, month, day] = r.date.split('-');
-                const matchesYear = year === filterYear;
+                const matchesYear = filterYear === 'All' || year === filterYear;
                 const matchesMonth = filterMonth === 'All' || month === filterMonth;
                 const matchesDay = filterDay === 'All' || day === filterDay;
                 const matchesDate = matchesYear && matchesMonth && matchesDay;
@@ -377,7 +396,14 @@ const AttendanceTracker = () => {
     ];
 
     const currentYear = new Date().getFullYear();
-    const years = [currentYear - 1, currentYear, currentYear + 1];
+    const years = [
+        String(currentYear - 1), String(currentYear), String(currentYear + 1),
+        ...attendanceData.map(record => record.date?.slice(0, 4)).filter(Boolean)
+    ];
+    const availableYears = [
+        'All',
+        ...new Set(years)
+    ].sort((a, b) => a === 'All' ? -1 : b === 'All' ? 1 : Number(b) - Number(a));
 
     return (
         <div className="space-y-6 animate-in fade-in duration-500">
@@ -478,7 +504,7 @@ const AttendanceTracker = () => {
                                         onClick={() => setIsYearOpen(false)}
                                     />
                                     <div className="absolute top-full left-0 mt-1 w-24 max-h-56 overflow-y-auto bg-background border border-border/40 rounded-xl shadow-xl z-50 py-1">
-                                        {years.map(y => (
+                                        {availableYears.map(y => (
                                             <div 
                                                 key={y} 
                                                 className={`px-3 py-1.5 text-sm cursor-pointer hover:bg-muted ${String(filterYear) === String(y) ? 'bg-primary/10 text-primary font-bold' : ''}`}

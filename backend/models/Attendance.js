@@ -101,6 +101,7 @@ const attendanceSchema = new mongoose.Schema(
 
 // Compound index to ensure one attendance record per user per day
 attendanceSchema.index({ userId: 1, date: 1 }, { unique: true });
+attendanceSchema.index({ adminId: 1, date: -1, createdAt: -1 });
 
 // Fast "was this kiosk scan already saved?" lookup (only records that have clientIds are indexed)
 attendanceSchema.index({ userId: 1, clientIds: 1 }, { sparse: true });
